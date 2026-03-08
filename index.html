@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phichain</title>
+    <style>
+      /* Override react-mosaic theme to match our dark editor */
+      .mosaic-dark-theme .mosaic-window .mosaic-window-toolbar {
+        background-color: var(--bg-tertiary, #1f2b47);
+        border-bottom: 1px solid var(--border-color, #2a3a5c);
+        height: 26px;
+      }
+      .mosaic-dark-theme .mosaic-window .mosaic-window-title {
+        color: var(--text-secondary, #8892a8);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .mosaic-dark-theme .mosaic-window .mosaic-window-body {
+        background-color: var(--bg-secondary, #16213e);
+      }
+      .mosaic-dark-theme .mosaic-split.-row { width: 4px !important; }
+      .mosaic-dark-theme .mosaic-split.-column { height: 4px !important; }
+      .mosaic-dark-theme .mosaic-split:hover {
+        background-color: var(--accent-primary, #4a9eff) !important;
+      }
+      /* Hide the default mosaic tile border */
+      .mosaic-dark-theme .mosaic-tile {
+        margin: 0;
+      }
+      .mosaic-dark-theme .mosaic-window .mosaic-window-controls .mosaic-default-control {
+        /* Mosaic close/expand buttons — style them to match */
+        color: var(--text-muted, #556070);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

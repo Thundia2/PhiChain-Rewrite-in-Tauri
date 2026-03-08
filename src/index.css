@@ -1,0 +1,146 @@
+/* Tailwind base import */
+@import "tailwindcss";
+
+/* ============================================================
+   CONFIGURABLE: Color palette for the editor theme.
+   Change these CSS variables to restyle the entire app.
+   ============================================================ */
+:root {
+  /* Background shades (darkest to lightest) */
+  --bg-primary: #1a1a2e;       /* Main background */
+  --bg-secondary: #16213e;     /* Panel backgrounds */
+  --bg-tertiary: #1f2b47;      /* Hover / raised surfaces */
+  --bg-active: #2a3a5c;        /* Active/selected panel header */
+
+  /* Text */
+  --text-primary: #e0e0e0;
+  --text-secondary: #8892a8;
+  --text-muted: #556070;
+
+  /* Accent colors */
+  --accent-primary: #4a9eff;   /* Buttons, links, active indicators */
+  --accent-hover: #6bb3ff;
+
+  /* Note type colors — used in toolbar icons, timeline, inspector */
+  --note-tap: #48b5ff;         /* Blue */
+  --note-drag: #ffd24a;        /* Yellow */
+  --note-hold: #4aff7a;        /* Green */
+  --note-flick: #ff4a6a;       /* Red */
+
+  /* Event type colors — used in timeline event columns */
+  --event-x: #ff6b6b;
+  --event-y: #51cf66;
+  --event-rotation: #ffd43b;
+  --event-opacity: #cc5de8;
+  --event-speed: #4dabf7;
+
+  /* Selection / indicators */
+  --selection-color: #90ee90;   /* Light green — matches original phichain */
+  --indicator-color: #00e5ff;   /* Cyan playhead line */
+  --beat-line-primary: rgba(255, 255, 255, 0.25);
+  --beat-line-secondary: rgba(255, 255, 255, 0.10);
+
+  /* Borders */
+  --border-color: #2a3a5c;
+  --border-active: #4a9eff;
+}
+
+/* ============================================================
+   Base styles
+   ============================================================ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  /* Prevent text selection while dragging in the editor */
+  user-select: none;
+}
+
+/* Allow text selection inside input fields and text areas */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+}
+
+/* ============================================================
+   Scrollbar styling (thin, dark)
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bg-active);
+}
+
+/* ============================================================
+   Panel styles (used by the docking system)
+   ============================================================ */
+.panel-container {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.panel-header {
+  background-color: var(--bg-tertiary);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.panel-body {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+}
+
+/* ============================================================
+   Tooltip styling
+   ============================================================ */
+.tooltip {
+  position: absolute;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+  pointer-events: none;
+  z-index: 1000;
+  white-space: nowrap;
+}
+
+.tooltip .shortcut {
+  color: var(--text-muted);
+  margin-left: 8px;
+  font-size: 11px;
+}
