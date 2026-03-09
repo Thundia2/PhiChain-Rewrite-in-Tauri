@@ -92,6 +92,10 @@ export interface Note {
   speed: number;
   /** For hold notes only: how many beats to hold */
   hold_beat?: Beat;
+  /** Fake note: displays but doesn't affect combo/judgment (RPE) */
+  fake?: boolean;
+  /** Vertical position offset in canvas units (RPE yOffset) */
+  y_offset?: number;
 }
 
 // ------ Line Events ------

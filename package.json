@@ -22,6 +22,7 @@
     "howler": "^2.2.4",
     "i18next": "^25.8.14",
     "immer": "^11.1.4",
+    "jszip": "^3.10.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hotkeys-hook": "^5.2.4",

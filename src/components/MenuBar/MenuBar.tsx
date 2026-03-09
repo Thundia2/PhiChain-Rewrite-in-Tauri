@@ -1,4 +1,12 @@
 import { useState, useRef, useEffect } from "react";
+import JSZip from "jszip";
+import { useChartStore } from "../../stores/chartStore";
+import { useTabStore } from "../../stores/tabStore";
+import { useAudioStore } from "../../stores/audioStore";
+import { audioEngine } from "../../audio/audioEngine";
+import { saveProject, exportAsOfficial } from "../../utils/ipc";
+import { convertRpeToPhichain, extractRpeMeta } from "../../utils/rpeImport";
+import type { PanelId } from "../../types/editor";
 
 // ============================================================
 // CONFIGURABLE: Menu structure
@@ -17,40 +25,194 @@ interface Menu {
   items: MenuItem[];
 }
 
-const MENUS: Menu[] = [
-  {
-    label: "File",
-    items: [
-      { label: "Save Project", shortcut: "Ctrl+S", action: () => console.log("TODO: save") },
-      { label: "Close Project", action: () => console.log("TODO: close") },
-      { separator: true, label: "" },
-      { label: "Quit", action: () => console.log("TODO: quit") },
-    ],
-  },
-  {
-    label: "Windows",
-    items: [
-      { label: "Timeline", action: () => console.log("TODO: toggle timeline") },
-      { label: "Inspector", action: () => console.log("TODO: toggle inspector") },
-      { label: "Line List", action: () => console.log("TODO: toggle line list") },
-      { label: "Settings", action: () => console.log("TODO: toggle settings") },
-    ],
-  },
-  {
-    label: "Export",
-    items: [
-      { label: "Export as Official", action: () => console.log("TODO: export") },
-    ],
-  },
-  {
-    label: "Layout",
-    items: [
-      { label: "Apply Default Layout", action: () => console.log("TODO: reset layout") },
-    ],
-  },
-];
+function useMenus(
+  onTogglePanel?: (id: PanelId) => void,
+  onResetLayout?: () => void,
+  onNewChart?: () => void,
+  onOpenSettings?: () => void,
+): Menu[] {
+  const projectPath = useChartStore((s) => s.projectPath);
+  const getChartJson = useChartStore((s) => s.getChartJson);
+  const markClean = useChartStore((s) => s.markClean);
+  const closeProject = useChartStore((s) => s.closeProject);
+  const undo = useChartStore((s) => s.undo);
+  const redo = useChartStore((s) => s.redo);
+  const canUndo = useChartStore((s) => s.canUndo);
+  const canRedo = useChartStore((s) => s.canRedo);
+  const isLoaded = useChartStore((s) => s.isLoaded);
 
-export function MenuBar() {
+  return [
+    {
+      label: "File",
+      items: [
+        { label: "New Chart...", shortcut: "Ctrl+N", action: onNewChart },
+        { separator: true, label: "" },
+        {
+          label: "Save Project",
+          shortcut: "Ctrl+S",
+          disabled: !isLoaded,
+          action: async () => {
+            if (!projectPath) return;
+            try {
+              await saveProject(projectPath, getChartJson());
+              markClean();
+            } catch (e) {
+              console.error("Save failed:", e);
+            }
+          },
+        },
+        { label: "Close Project", disabled: !isLoaded, action: closeProject },
+        { separator: true, label: "" },
+        {
+          label: "Import RPE Chart...",
+          action: () => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".json,.zip";
+            input.onchange = async () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              try {
+                let chartText: string;
+                let musicBlob: Blob | null = null;
+                let musicExt: string | null = null;
+                let illustrationBlob: Blob | null = null;
+
+                if (file.name.toLowerCase().endsWith(".zip")) {
+                  // ZIP import: extract chart JSON, music, and illustration
+                  const zipData = await file.arrayBuffer();
+                  const zip = await JSZip.loadAsync(zipData);
+
+                  let chartEntry: JSZip.JSZipObject | null = null;
+                  let audioEntry: JSZip.JSZipObject | null = null;
+                  let imageEntry: JSZip.JSZipObject | null = null;
+
+                  zip.forEach((relativePath, entry) => {
+                    if (entry.dir) return;
+                    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
+                    if (baseName.endsWith(".json") && !chartEntry) {
+                      chartEntry = entry;
+                    } else if (/\.(mp3|ogg|wav|flac|m4a)$/.test(baseName) && !audioEntry) {
+                      audioEntry = entry;
+                      musicExt = baseName.split(".").pop() ?? "mp3";
+                    } else if (/\.(jpg|jpeg|png|webp)$/.test(baseName) && !imageEntry) {
+                      imageEntry = entry;
+                    }
+                  });
+
+                  if (!chartEntry) {
+                    throw new Error("No .json chart file found in the zip archive.");
+                  }
+                  chartText = await chartEntry.async("string");
+
+                  if (audioEntry) {
+                    musicBlob = await (audioEntry as JSZip.JSZipObject).async("blob");
+                  }
+                  if (imageEntry) {
+                    illustrationBlob = await (imageEntry as JSZip.JSZipObject).async("blob");
+                  }
+                } else {
+                  // Plain JSON import
+                  chartText = await file.text();
+                }
+
+                const chart = convertRpeToPhichain(chartText);
+                const meta = extractRpeMeta(chartText);
+                const cs = useChartStore.getState();
+
+                cs.loadFromProjectData({
+                  project_path: null,
+                  music_path: null,
+                  illustration_path: null,
+                  meta,
+                  chart_json: JSON.stringify(chart),
+                });
+
+                // Load music if found in zip
+                if (musicBlob && musicExt) {
+                  const musicUrl = URL.createObjectURL(musicBlob);
+                  await audioEngine.load(musicUrl, musicExt);
+                  useAudioStore.getState().setMusicLoaded(true);
+                }
+
+                // Load illustration if found in zip
+                if (illustrationBlob) {
+                  const illustrationUrl = URL.createObjectURL(illustrationBlob);
+                  await cs.loadIllustration(illustrationUrl);
+                }
+
+                useTabStore.getState().openChart("rpe-import", meta.name || "Imported RPE Chart");
+              } catch (e) {
+                console.error("RPE import failed:", e);
+                alert("Failed to import RPE chart. Check the console for details.");
+              }
+            };
+            input.click();
+          },
+        },
+        { separator: true, label: "" },
+        { label: "Preferences...", action: onOpenSettings },
+        { separator: true, label: "" },
+        { label: "Quit", action: () => console.log("TODO: quit") },
+      ],
+    },
+    {
+      label: "Edit",
+      items: [
+        { label: "Undo", shortcut: "Ctrl+Z", disabled: !canUndo(), action: undo },
+        { label: "Redo", shortcut: "Ctrl+Shift+Z", disabled: !canRedo(), action: redo },
+      ],
+    },
+    {
+      label: "Windows",
+      items: [
+        { label: "Timeline", action: () => onTogglePanel?.("timeline") },
+        { label: "Inspector", action: () => onTogglePanel?.("inspector") },
+        { label: "Line List", action: () => onTogglePanel?.("line-list") },
+        { label: "Toolbar", action: () => onTogglePanel?.("toolbar") },
+        { label: "Timeline Settings", action: () => onTogglePanel?.("timeline-settings") },
+        { label: "BPM List", action: () => onTogglePanel?.("bpm-list") },
+        { label: "Chart Settings", action: () => onTogglePanel?.("chart-settings") },
+      ],
+    },
+    {
+      label: "Export",
+      items: [
+        {
+          label: "Export as Official",
+          disabled: !isLoaded,
+          action: async () => {
+            try {
+              const result = await exportAsOfficial(getChartJson());
+              console.log("Export result:", result);
+            } catch (e) {
+              console.error("Export failed:", e);
+            }
+          },
+        },
+      ],
+    },
+    {
+      label: "Layout",
+      items: [
+        { label: "Apply Default Layout", action: onResetLayout },
+      ],
+    },
+  ];
+}
+
+export function MenuBar({
+  onTogglePanel,
+  onResetLayout,
+  onNewChart,
+  onOpenSettings,
+}: {
+  onTogglePanel?: (id: PanelId) => void;
+  onResetLayout?: () => void;
+  onNewChart?: () => void;
+  onOpenSettings?: () => void;
+}) {
+  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onOpenSettings);
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +230,7 @@ export function MenuBar() {
   return (
     <div
       ref={menuRef}
-      className="flex items-center h-7 px-2 gap-0 flex-shrink-0"
+      className="flex items-center h-7 px-2 gap-1 flex-shrink-0"
       style={{
         backgroundColor: "var(--bg-tertiary)",
         borderBottom: "1px solid var(--border-color)",

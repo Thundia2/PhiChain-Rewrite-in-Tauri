@@ -13,8 +13,6 @@ export type EditorTool =
   | "place_drag"          // Click to place a Drag note
   | "place_flick"         // Click to place a Flick note
   | "place_hold"          // Click to start a Hold, click again to end
-  | "place_transition"    // Click to start a Transition event, click to end
-  | "place_constant"      // Click to place a Constant event
   | "eraser";             // Click to delete notes/events
 
 /** Which side of the line to show notes for in the timeline */
@@ -30,7 +28,6 @@ export type PanelId =
   | "timeline-settings"
   | "bpm-list"
   | "chart-settings"
-  | "settings"
   | "hotkey-reference";
 
 /** Keyboard shortcut definition */
