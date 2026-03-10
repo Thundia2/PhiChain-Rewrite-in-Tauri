@@ -12,7 +12,7 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { EventCanvasRenderer } from "../../canvas/eventCanvasRenderer";
-import { evaluateLineEvents } from "../../canvas/events";
+import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { BpmList } from "../../utils/bpmList";
 import { CANVAS_WIDTH, CANVAS_HEIGHT, beatToFloat, floatToBeat } from "../../types/chart";
 import type { LineEvent, LineEventKind, Beat } from "../../types/chart";
@@ -195,7 +195,7 @@ export function EventCanvas({ lineIndex }: EventCanvasProps) {
     if (!line) return;
 
     const currentBeat = getCurrentBeat();
-    const state = evaluateLineEvents(line.events, currentBeat);
+    const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
 
     const screenX = renderer.canvasToScreenX(state.x, canvas.width);
     const screenY = renderer.canvasToScreenY(state.y, canvas.height);
@@ -329,7 +329,7 @@ export function EventCanvas({ lineIndex }: EventCanvasProps) {
     if (!line) return;
 
     const currentBeat = getCurrentBeat();
-    const state = evaluateLineEvents(line.events, currentBeat);
+    const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
     const screenX = renderer.canvasToScreenX(state.x, canvas.width);
     const screenY = renderer.canvasToScreenY(state.y, canvas.height);
 

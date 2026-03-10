@@ -10,11 +10,13 @@
 
 import { Howl } from "howler";
 import { useAudioStore } from "../stores/audioStore";
+import { useSettingsStore } from "../stores/settingsStore";
 
 class AudioEngine {
   private howl: Howl | null = null;
   private rafId = 0;
   private _loaded = false;
+  private _volume = 1.0;
 
   /** For timer-based playback when no audio is loaded */
   private lastFrameTime = 0;
@@ -34,11 +36,15 @@ class AudioEngine {
     return new Promise((resolve, reject) => {
       this.unload();
 
+      // Read current music volume from settings
+      this._volume = useSettingsStore.getState().musicVolume;
+
       this.howl = new Howl({
         src: [src],
         ...(format ? { format: [format] } : {}),
         html5: true, // Stream from disk — don't decode entire file into memory
         preload: true,
+        volume: this._volume * this._volume * this._volume,
         onload: () => {
           this._loaded = true;
           const duration = this.howl?.duration() ?? 0;
@@ -123,7 +129,24 @@ class AudioEngine {
     if (this.howl) {
       this.howl.rate(clamped);
     }
-    useAudioStore.getState().setPlaybackRate(clamped);
+    // Use internal setter to avoid circular call:
+    // setPlaybackRate → setRate → setPlaybackRate → ...
+    useAudioStore.getState()._setPlaybackRateInternal(clamped);
+  }
+
+  /**
+   * Set music volume (0.0 - 1.0, linear slider value).
+   * Applies a cubic curve so low slider values produce much quieter
+   * output, matching human perception of loudness:
+   *   5% → 0.0001, 10% → 0.001, 50% → 0.125, 100% → 1.0
+   */
+  setVolume(volume: number): void {
+    const linear = Math.max(0, Math.min(1, volume));
+    this._volume = linear;
+    const actual = linear * linear * linear;
+    if (this.howl) {
+      this.howl.volume(actual);
+    }
   }
 
   /** Get current playback position in seconds */

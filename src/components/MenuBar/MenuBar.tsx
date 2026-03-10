@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from "react";
 import JSZip from "jszip";
 import { useChartStore } from "../../stores/chartStore";
-import { useTabStore } from "../../stores/tabStore";
+import { useTabStore, type TabType } from "../../stores/tabStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { audioEngine } from "../../audio/audioEngine";
 import { saveProject, exportAsOfficial } from "../../utils/ipc";
 import { convertRpeToPhichain, extractRpeMeta } from "../../utils/rpeImport";
+import { convertPhichainToRpe } from "../../utils/rpeExport";
+import { convertPecToPhichain } from "../../utils/pecImport";
 import type { PanelId } from "../../types/editor";
 
 // ============================================================
@@ -40,6 +42,8 @@ function useMenus(
   const canUndo = useChartStore((s) => s.canUndo);
   const canRedo = useChartStore((s) => s.canRedo);
   const isLoaded = useChartStore((s) => s.isLoaded);
+  const getMeta = useChartStore((s) => s.meta);
+  const openUnifiedEditor = useTabStore((s) => s.openUnifiedEditor);
 
   return [
     {
@@ -150,6 +154,37 @@ function useMenus(
             input.click();
           },
         },
+        {
+          label: "Import PEC Chart...",
+          action: () => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".pec,.txt";
+            input.onchange = async () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              try {
+                const pecText = await file.text();
+                const chart = convertPecToPhichain(pecText);
+                const cs = useChartStore.getState();
+
+                cs.loadFromProjectData({
+                  project_path: null,
+                  music_path: null,
+                  illustration_path: null,
+                  meta: { name: file.name.replace(/\.(pec|txt)$/i, ""), composer: "", charter: "", illustrator: "", level: "" },
+                  chart_json: JSON.stringify(chart),
+                });
+
+                useTabStore.getState().openChart("pec-import", file.name.replace(/\.(pec|txt)$/i, "") || "Imported PEC Chart");
+              } catch (e) {
+                console.error("PEC import failed:", e);
+                alert("Failed to import PEC chart. Check the console for details.");
+              }
+            };
+            input.click();
+          },
+        },
         { separator: true, label: "" },
         { label: "Preferences...", action: onOpenSettings },
         { separator: true, label: "" },
@@ -173,6 +208,39 @@ function useMenus(
         { label: "Timeline Settings", action: () => onTogglePanel?.("timeline-settings") },
         { label: "BPM List", action: () => onTogglePanel?.("bpm-list") },
         { label: "Chart Settings", action: () => onTogglePanel?.("chart-settings") },
+        { separator: true, label: "" },
+        { label: "Validation", action: () => onTogglePanel?.("validation") },
+      ],
+    },
+    {
+      label: "View",
+      items: [
+        {
+          label: "Unified Editor",
+          disabled: !isLoaded,
+          action: () => openUnifiedEditor(),
+        },
+        { separator: true, label: "" },
+        {
+          label: "Classic Editor",
+          disabled: !isLoaded,
+          action: () => {
+            const ts = useTabStore.getState();
+            const chartTab = ts.tabs.find((t) => t.type === "chart");
+            if (chartTab) {
+              ts.setActiveTab(chartTab.id);
+            } else {
+              // Create a classic chart tab if none exists
+              const meta = useChartStore.getState().meta;
+              ts.openTab({
+                id: "chart:current",
+                type: "chart",
+                label: meta.name || "Chart",
+                closable: true,
+              });
+            }
+          },
+        },
       ],
     },
     {
@@ -187,6 +255,28 @@ function useMenus(
               console.log("Export result:", result);
             } catch (e) {
               console.error("Export failed:", e);
+            }
+          },
+        },
+        {
+          label: "Export as RPE JSON",
+          disabled: !isLoaded,
+          action: () => {
+            try {
+              const chart = JSON.parse(getChartJson());
+              const meta = useChartStore.getState().meta;
+              const rpeJson = convertPhichainToRpe(chart, meta);
+              // Download as file
+              const blob = new Blob([rpeJson], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `${meta.name || "chart"}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch (e) {
+              console.error("RPE export failed:", e);
+              alert("Failed to export RPE chart. Check the console for details.");
             }
           },
         },

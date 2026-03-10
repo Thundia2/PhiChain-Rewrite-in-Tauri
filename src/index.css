@@ -7,19 +7,20 @@
    ============================================================ */
 :root {
   /* Background shades (darkest to lightest) */
-  --bg-primary: #1a1a2e;       /* Main background */
-  --bg-secondary: #16213e;     /* Panel backgrounds */
-  --bg-tertiary: #1f2b47;      /* Hover / raised surfaces */
-  --bg-active: #2a3a5c;        /* Active/selected panel header */
+  --bg-primary: #111118;       /* Main background */
+  --bg-secondary: #16161d;     /* Panel backgrounds */
+  --bg-tertiary: #1a1a22;      /* Hover / raised surfaces */
+  --bg-active: #222230;        /* Active/selected panel header */
+  --bg-accent: #141419;        /* Accent backgrounds (keyframe bar, tab bar) */
 
   /* Text */
-  --text-primary: #e0e0e0;
-  --text-secondary: #8892a8;
-  --text-muted: #556070;
+  --text-primary: #e0e0e8;
+  --text-secondary: #888;
+  --text-muted: #555;
 
   /* Accent colors */
-  --accent-primary: #4a9eff;   /* Buttons, links, active indicators */
-  --accent-hover: #6bb3ff;
+  --accent-primary: #6c8aff;   /* Buttons, links, active indicators */
+  --accent-hover: #8aa4ff;
 
   /* Note type colors — used in toolbar icons, timeline, inspector */
   --note-tap: #48b5ff;         /* Blue */
@@ -41,8 +42,8 @@
   --beat-line-secondary: rgba(255, 255, 255, 0.10);
 
   /* Borders */
-  --border-color: #2a3a5c;
-  --border-active: #4a9eff;
+  --border-color: #2a2a35;
+  --border-active: #6c8aff;
 }
 
 /* ============================================================
@@ -70,6 +71,12 @@ html, body, #root {
 /* Allow text selection inside input fields and text areas */
 input, textarea, [contenteditable="true"] {
   user-select: text;
+}
+
+/* Unified editor monospace font */
+.unified-editor {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 12px;
 }
 
 /* ============================================================
@@ -187,6 +194,26 @@ input, textarea, [contenteditable="true"] {
 }
 .mosaic-default-control.bp3-button.close-button[class*="bp3-icon"]::before {
   content: "\2715" !important;   /* ✕ */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 12px !important;
+}
+
+/* Custom expand button — first click expands, second opens as tab */
+.mosaic-default-control.custom-expand-button::before {
+  content: "\2922" !important;   /* ⤢ — expand icon */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 12px !important;
+}
+.mosaic-default-control.custom-expand-button.is-expanded::before {
+  content: "\21D7" !important;   /* ⇗ — open-as-tab icon */
+}
+.mosaic-default-control.custom-expand-button.is-expanded {
+  color: var(--accent-primary);
+}
+
+/* Collapse button — shown when a panel is expanded (first click) */
+.mosaic-default-control.collapse-button::before {
+  content: "\2190" !important;   /* ← — back/collapse icon */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
   font-size: 12px !important;
 }

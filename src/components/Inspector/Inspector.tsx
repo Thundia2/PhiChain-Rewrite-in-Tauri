@@ -66,6 +66,43 @@ function NoteInspector({ note, lineIndex, noteIndex }: { note: Note; lineIndex: 
           onChange={(b) => editNote(lineIndex, noteIndex, { hold_beat: b })}
         />
       )}
+      <div className="mt-1 text-xs font-medium" style={{ color: "var(--text-muted)" }}>RPE Properties</div>
+      <Field
+        label="Size"
+        value={note.size ?? 1}
+        onChange={(v) => {
+          const val = parseFloat(v);
+          editNote(lineIndex, noteIndex, { size: val === 1 ? undefined : val || 1 });
+        }}
+        step="0.1"
+      />
+      <Field
+        label="Alpha"
+        value={note.alpha ?? 255}
+        onChange={(v) => {
+          const val = parseInt(v);
+          editNote(lineIndex, noteIndex, { alpha: val === 255 ? undefined : Math.max(0, Math.min(255, val || 255)) });
+        }}
+        step="1"
+      />
+      <Field
+        label="Vis. Time"
+        value={note.visible_time ?? 999999}
+        onChange={(v) => {
+          const val = parseFloat(v);
+          editNote(lineIndex, noteIndex, { visible_time: val === 999999 ? undefined : val || 999999 });
+        }}
+        step="0.5"
+      />
+      <SelectField
+        label="Fake"
+        value={note.fake ? "true" : "false"}
+        options={[
+          { value: "false", label: "No" },
+          { value: "true", label: "Yes" },
+        ]}
+        onChange={(v) => editNote(lineIndex, noteIndex, { fake: v === "true" ? true : undefined })}
+      />
     </div>
   );
 }
@@ -159,6 +196,18 @@ function EventInspectorPanel({ event, lineIndex, eventIndex }: { event: LineEven
               })
             }
           />
+          <Field
+            label="Ease L"
+            value={event.easing_left ?? 0}
+            onChange={(v) => editEvent(lineIndex, eventIndex, { easing_left: parseFloat(v) || 0 })}
+            step="0.05"
+          />
+          <Field
+            label="Ease R"
+            value={event.easing_right ?? 1}
+            onChange={(v) => editEvent(lineIndex, eventIndex, { easing_right: parseFloat(v) || 1 })}
+            step="0.05"
+          />
         </>
       ) : (
         <Field
@@ -193,7 +242,69 @@ function LineInspector({ lineIndex }: { lineIndex: number }) {
       />
       <div className="text-xs" style={{ color: "var(--text-muted)" }}>
         {line.notes.length} notes, {line.events.length} events
+        {line.event_layers && line.event_layers.length > 0 ? `, ${line.event_layers.length} layers` : ""}
       </div>
+      <div className="mt-1 text-xs font-medium" style={{ color: "var(--text-muted)" }}>RPE Properties</div>
+      <Field
+        label="Z Order"
+        value={line.z_order ?? 0}
+        onChange={(v) => {
+          const val = parseInt(v);
+          editLine(lineIndex, { z_order: val === 0 ? undefined : val });
+        }}
+        step="1"
+      />
+      <SelectField
+        label="Is Cover"
+        value={line.is_cover === false ? "false" : "true"}
+        options={[
+          { value: "true", label: "Yes" },
+          { value: "false", label: "No" },
+        ]}
+        onChange={(v) => editLine(lineIndex, { is_cover: v === "false" ? false : undefined })}
+      />
+      <Field
+        label="BPM Factor"
+        value={line.bpm_factor ?? 1}
+        onChange={(v) => {
+          const val = parseFloat(v);
+          editLine(lineIndex, { bpm_factor: val === 1 ? undefined : val || 1 });
+        }}
+        step="0.1"
+      />
+      <Field
+        label="Group"
+        value={line.group ?? 0}
+        onChange={(v) => {
+          const val = parseInt(v);
+          editLine(lineIndex, { group: val === 0 ? undefined : val });
+        }}
+        step="1"
+      />
+      <Field
+        label="Texture"
+        type="text"
+        value={line.texture ?? ""}
+        onChange={(v) => editLine(lineIndex, { texture: v || undefined })}
+      />
+      <SelectField
+        label="Rot w/ Father"
+        value={line.rotate_with_father === false ? "false" : "true"}
+        options={[
+          { value: "true", label: "Yes" },
+          { value: "false", label: "No" },
+        ]}
+        onChange={(v) => editLine(lineIndex, { rotate_with_father: v === "false" ? false : undefined })}
+      />
+      <Field
+        label="Father Idx"
+        value={line.father_index ?? -1}
+        onChange={(v) => {
+          const val = parseInt(v);
+          editLine(lineIndex, { father_index: val === -1 ? undefined : val });
+        }}
+        step="1"
+      />
     </div>
   );
 }
@@ -224,6 +335,46 @@ function MultiNoteInspector({ count, lineIndex, indices }: { count: number; line
         ]}
         onChange={(v) => {
           if (v) editNotes(lineIndex, indices, { above: v === "above" });
+        }}
+      />
+      <div className="mt-1 text-xs font-medium" style={{ color: "var(--text-muted)" }}>RPE Properties</div>
+      <Field
+        label="Size"
+        type="text"
+        value=""
+        onChange={(v) => {
+          const val = parseFloat(v);
+          if (!isNaN(val)) editNotes(lineIndex, indices, { size: val === 1 ? undefined : val || 1 });
+        }}
+      />
+      <Field
+        label="Alpha"
+        type="text"
+        value=""
+        onChange={(v) => {
+          const val = parseInt(v);
+          if (!isNaN(val)) editNotes(lineIndex, indices, { alpha: val === 255 ? undefined : Math.max(0, Math.min(255, val)) });
+        }}
+      />
+      <Field
+        label="Vis. Time"
+        type="text"
+        value=""
+        onChange={(v) => {
+          const val = parseFloat(v);
+          if (!isNaN(val)) editNotes(lineIndex, indices, { visible_time: val === 999999 ? undefined : val || 999999 });
+        }}
+      />
+      <SelectField
+        label="Fake"
+        value=""
+        options={[
+          { value: "", label: "(mixed)" },
+          { value: "false", label: "No" },
+          { value: "true", label: "Yes" },
+        ]}
+        onChange={(v) => {
+          if (v) editNotes(lineIndex, indices, { fake: v === "true" ? true : undefined });
         }}
       />
     </div>

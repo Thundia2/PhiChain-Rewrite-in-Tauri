@@ -10,7 +10,7 @@
 // ============================================================
 
 import { create } from "zustand";
-import type { EditorTool, NoteSideFilter } from "../types/editor";
+import type { EditorTool, NoteSideFilter, LineSortMode } from "../types/editor";
 import type { Beat, NoteKind, LineEventKind } from "../types/chart";
 
 export interface DragSelectionRect {
@@ -22,6 +22,7 @@ export interface PendingNote {
   beat: Beat;
   x: number;
   kind: NoteKind;
+  above: boolean;
 }
 
 export interface EditorState {
@@ -56,11 +57,15 @@ export interface EditorState {
   // ---- FC/AP tracking ----
   isFcValid: boolean;
 
+  // ---- Line list sort ----
+  lineSortMode: LineSortMode;
+
   // ---- Line Event Editor state ----
   eventEditorCurrentBeat: number;
   eventEditorShowAllLines: boolean;
   eventEditorShowNotes: boolean;
   eventEditorActiveProperty: LineEventKind;
+  eventEditorActiveLayer: number; // 0-4 for event layers, -1 for flat events
   eventEditorDragState: {
     isDragging: boolean;
     dragType: "translate" | "rotate" | null;
@@ -68,6 +73,25 @@ export interface EditorState {
     startMouseY: number;
     startValue: { x: number; y: number; rotation: number };
   } | null;
+
+  // ---- Unified Canvas state ----
+  canvasInteractionMode:
+    | "idle"
+    | "dragging_translate"
+    | "dragging_rotate"
+    | "placing_note"
+    | "drag_selecting"
+    | "dragging_note"
+    | "panning";
+  canvasViewport: {
+    offsetX: number;
+    offsetY: number;
+    zoom: number;
+  };
+  lineVisibility: Record<number, boolean>;
+  lineLocked: Record<number, boolean>;
+  lineDrawerOpen: boolean;
+  unifiedInspectorOpen: boolean;
 
   // ---- Selection actions ----
   selectLine: (index: number | null) => void;
@@ -104,12 +128,25 @@ export interface EditorState {
   setFcValid: (valid: boolean) => void;
   resetFcValid: () => void;
 
+  // ---- Line list sort actions ----
+  setLineSortMode: (mode: LineSortMode) => void;
+
   // ---- Line Event Editor actions ----
   setEventEditorBeat: (beat: number) => void;
   toggleEventEditorShowAllLines: () => void;
   toggleEventEditorShowNotes: () => void;
   setEventEditorActiveProperty: (prop: LineEventKind) => void;
+  setEventEditorActiveLayer: (layer: number) => void;
   setEventEditorDragState: (state: EditorState["eventEditorDragState"]) => void;
+
+  // ---- Unified Canvas actions ----
+  setCanvasInteractionMode: (mode: EditorState["canvasInteractionMode"]) => void;
+  setCanvasViewport: (viewport: Partial<EditorState["canvasViewport"]>) => void;
+  resetCanvasViewport: () => void;
+  toggleLineVisibility: (index: number) => void;
+  toggleLineLocked: (index: number) => void;
+  toggleLineDrawer: () => void;
+  toggleUnifiedInspector: () => void;
 }
 
 export const useEditorStore = create<EditorState>()((set) => ({
@@ -129,11 +166,21 @@ export const useEditorStore = create<EditorState>()((set) => ({
   pendingNote: null,
   curveTrackCreation: null,
   isFcValid: true,
+  lineSortMode: "chart_order",
   eventEditorCurrentBeat: 0,
   eventEditorShowAllLines: false,
   eventEditorShowNotes: false,
   eventEditorActiveProperty: "x",
+  eventEditorActiveLayer: -1, // -1 = flat events (non-layered)
   eventEditorDragState: null,
+
+  // ---- Unified Canvas ----
+  canvasInteractionMode: "idle",
+  canvasViewport: { offsetX: 0, offsetY: 0, zoom: 1.0 },
+  lineVisibility: {},
+  lineLocked: {},
+  lineDrawerOpen: false,
+  unifiedInspectorOpen: true,
 
   // ---- Selection ----
 
@@ -223,10 +270,29 @@ export const useEditorStore = create<EditorState>()((set) => ({
   setFcValid: (valid) => set({ isFcValid: valid }),
   resetFcValid: () => set({ isFcValid: true }),
 
+  // ---- Line list sort ----
+  setLineSortMode: (mode) => set({ lineSortMode: mode }),
+
   // ---- Line Event Editor ----
   setEventEditorBeat: (beat) => set({ eventEditorCurrentBeat: Math.max(0, beat) }),
   toggleEventEditorShowAllLines: () => set((s) => ({ eventEditorShowAllLines: !s.eventEditorShowAllLines })),
   toggleEventEditorShowNotes: () => set((s) => ({ eventEditorShowNotes: !s.eventEditorShowNotes })),
   setEventEditorActiveProperty: (prop) => set({ eventEditorActiveProperty: prop }),
+  setEventEditorActiveLayer: (layer) => set({ eventEditorActiveLayer: Math.max(-1, Math.min(4, layer)) }),
   setEventEditorDragState: (state) => set({ eventEditorDragState: state }),
+
+  // ---- Unified Canvas ----
+  setCanvasInteractionMode: (mode) => set({ canvasInteractionMode: mode }),
+  setCanvasViewport: (viewport) => set((s) => ({
+    canvasViewport: { ...s.canvasViewport, ...viewport },
+  })),
+  resetCanvasViewport: () => set({ canvasViewport: { offsetX: 0, offsetY: 0, zoom: 1.0 } }),
+  toggleLineVisibility: (index) => set((s) => ({
+    lineVisibility: { ...s.lineVisibility, [index]: !(s.lineVisibility[index] ?? true) },
+  })),
+  toggleLineLocked: (index) => set((s) => ({
+    lineLocked: { ...s.lineLocked, [index]: !s.lineLocked[index] },
+  })),
+  toggleLineDrawer: () => set((s) => ({ lineDrawerOpen: !s.lineDrawerOpen })),
+  toggleUnifiedInspector: () => set((s) => ({ unifiedInspectorOpen: !s.unifiedInspectorOpen })),
 }));

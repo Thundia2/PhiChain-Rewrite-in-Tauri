@@ -281,6 +281,30 @@ export function SettingsPage() {
               onChange={(v) => update({ invertScrollDirection: v })}
             />
           </SettingRow>
+          <SettingRow label="Follow Playback" description="Auto-scroll the timeline to keep the current time in view during playback">
+            <ToggleSwitch
+              checked={settings.timelineFollowPlayback}
+              onChange={(v) => update({ timelineFollowPlayback: v })}
+            />
+          </SettingRow>
+        </Section>
+
+        <Section title="Editor">
+          <SettingRow label="Default Editor View" description="Which view to use when opening a chart">
+            <select
+              className="px-2 py-1 rounded text-xs"
+              style={{
+                backgroundColor: "var(--bg-active)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+              }}
+              value={settings.defaultEditorView}
+              onChange={(e) => update({ defaultEditorView: e.target.value as "unified" | "classic" })}
+            >
+              <option value="unified">Unified Editor</option>
+              <option value="classic">Classic View</option>
+            </select>
+          </SettingRow>
         </Section>
 
         <Section title="Event Editor">

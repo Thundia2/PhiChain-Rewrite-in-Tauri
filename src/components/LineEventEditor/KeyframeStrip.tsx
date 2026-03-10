@@ -13,15 +13,7 @@ import { useAudioStore } from "../../stores/audioStore";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../types/chart";
 import type { LineEvent, LineEventKind } from "../../types/chart";
-
-// Event colors matching the timeline
-const EVENT_COLORS: Record<LineEventKind, string> = {
-  x: "#ff6b6b",
-  y: "#51cf66",
-  rotation: "#ffd43b",
-  opacity: "#cc5de8",
-  speed: "#4dabf7",
-};
+import { EVENT_COLORS } from "./EventEditorToolbar";
 
 interface KeyframeStripProps {
   lineIndex: number;
@@ -101,21 +93,55 @@ export function KeyframeStrip({ lineIndex }: KeyframeStripProps) {
 
       // ---- Event keyframe diamonds ----
       const diamondSize = 5;
-      const kinds: LineEventKind[] = ["x", "y", "rotation", "opacity", "speed"];
+      const activeLayer = es.eventEditorActiveLayer;
+      const allKinds: LineEventKind[] = [
+        "x", "y", "rotation", "opacity", "speed",
+        "scale_x", "scale_y", "color", "text", "incline",
+      ];
+
+      // Determine which events to display based on active layer
+      let displayEvents: LineEvent[];
+      if (activeLayer >= 0 && line.event_layers && line.event_layers[activeLayer]) {
+        // Show events from the selected layer
+        const layer = line.event_layers[activeLayer];
+        displayEvents = [
+          ...layer.move_x_events,
+          ...layer.move_y_events,
+          ...layer.rotate_events,
+          ...layer.alpha_events,
+          ...layer.speed_events,
+        ];
+      } else {
+        displayEvents = line.events;
+      }
+
+      // Filter to kinds that have events (to avoid empty lanes)
+      const activeKinds = allKinds.filter((kind) =>
+        displayEvents.some((e) => e.kind === kind)
+      );
+      // Always show the core 5 kinds
+      const coreKinds: LineEventKind[] = ["x", "y", "rotation", "opacity", "speed"];
+      const kinds = [...new Set([...coreKinds, ...activeKinds])];
+
       const laneHeight = (height - 14) / kinds.length; // Leave room for labels
+
+      const KIND_SHORT: Record<string, string> = {
+        x: "X", y: "Y", rotation: "R", opacity: "O", speed: "S",
+        scale_x: "SX", scale_y: "SY", color: "C", text: "T", incline: "I",
+      };
 
       for (let ki = 0; ki < kinds.length; ki++) {
         const kind = kinds[ki];
         const cy = 4 + laneHeight * (ki + 0.5);
 
         // Kind label
-        ctx.fillStyle = EVENT_COLORS[kind];
+        ctx.fillStyle = EVENT_COLORS[kind] || "#888";
         ctx.font = "bold 8px sans-serif";
         ctx.textAlign = "left";
-        ctx.fillText(kind.charAt(0).toUpperCase(), 3, cy + 3);
+        ctx.fillText(KIND_SHORT[kind] || kind.charAt(0).toUpperCase(), 3, cy + 3);
 
         // Draw keyframes
-        const events = line.events.filter((e) => e.kind === kind);
+        const events = displayEvents.filter((e) => e.kind === kind);
         for (const event of events) {
           const startBeat = beatToFloat(event.start_beat);
           const endBeat = beatToFloat(event.end_beat);
@@ -126,17 +152,18 @@ export function KeyframeStrip({ lineIndex }: KeyframeStripProps) {
           if (endPx < 0 || startPx > width) continue;
 
           // Draw event span bar
-          const isTransition = "transition" in event.value;
+          const isTransition = "transition" in event.value || "color_transition" in event.value;
+          const kindColor = EVENT_COLORS[kind] || "#888";
           ctx.fillStyle = isTransition
-            ? EVENT_COLORS[kind] + "30"
-            : EVENT_COLORS[kind] + "18";
+            ? kindColor + "30"
+            : kindColor + "18";
           const barStart = Math.max(startPx, 0);
           const barEnd = Math.min(endPx, width);
           ctx.fillRect(barStart, cy - laneHeight * 0.35, barEnd - barStart, laneHeight * 0.7);
 
           // Draw start diamond
           if (startPx >= -5 && startPx <= width + 5) {
-            ctx.fillStyle = EVENT_COLORS[kind];
+            ctx.fillStyle = kindColor;
             ctx.beginPath();
             ctx.moveTo(startPx, cy - diamondSize);
             ctx.lineTo(startPx + diamondSize, cy);

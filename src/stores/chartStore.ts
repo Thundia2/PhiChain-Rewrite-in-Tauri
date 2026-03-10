@@ -21,6 +21,8 @@ import type {
   LineEvent,
   BpmPoint,
   CurveNoteTrack,
+  EventLayer,
+  LineEventKind,
 } from "../types/chart";
 import { beatToFloat } from "../types/chart";
 
@@ -84,6 +86,29 @@ function sortEvents(events: LineEvent[]) {
   events.sort((a, b) => beatToFloat(a.start_beat) - beatToFloat(b.start_beat));
 }
 
+// ---- Helper: get the events array for a given kind within an event layer ----
+function getLayerEvents(layer: EventLayer, kind: LineEventKind): LineEvent[] {
+  switch (kind) {
+    case "x": return layer.move_x_events;
+    case "y": return layer.move_y_events;
+    case "rotation": return layer.rotate_events;
+    case "opacity": return layer.alpha_events;
+    case "speed": return layer.speed_events;
+    default: return [];
+  }
+}
+
+// ---- Helper: create an empty event layer ----
+function createEmptyLayer(): EventLayer {
+  return {
+    move_x_events: [],
+    move_y_events: [],
+    rotate_events: [],
+    alpha_events: [],
+    speed_events: [],
+  };
+}
+
 // ============================================================
 // State shape
 // ============================================================
@@ -117,6 +142,7 @@ export interface ChartState {
   // ---- Line mutations ----
   addLine: (line?: Partial<Line>) => void;
   removeLine: (lineIndex: number) => void;
+  duplicateLine: (lineIndex: number) => void;
   editLine: (lineIndex: number, changes: Partial<Line>) => void;
   reorderLines: (fromIndex: number, toIndex: number) => void;
 
@@ -136,6 +162,12 @@ export interface ChartState {
   editEvent: (lineIndex: number, eventIndex: number, changes: Partial<LineEvent>) => void;
   /** Atomically replace one event with one or more new events (single undo entry) */
   replaceEvent: (lineIndex: number, oldEventIndex: number, newEvents: LineEvent[]) => void;
+
+  // ---- Event layer mutations ----
+  addEventToLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, event: LineEvent) => void;
+  removeEventsFromLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, eventIndices: number[]) => void;
+  editEventInLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, eventIndex: number, changes: Partial<LineEvent>) => void;
+  ensureEventLayers: (lineIndex: number) => void;
 
   // ---- Curve note track mutations ----
   addCurveNoteTrack: (lineIndex: number, track: CurveNoteTrack) => void;
@@ -249,6 +281,18 @@ export const useChartStore = create<ChartState>()((set, get) => ({
         if (lineIndex < 0 || lineIndex >= state.chart.lines.length) return;
         pushHistory(state);
         state.chart.lines.splice(lineIndex, 1);
+      }),
+    ),
+
+  duplicateLine: (lineIndex) =>
+    set(
+      produce((state: ChartState) => {
+        if (lineIndex < 0 || lineIndex >= state.chart.lines.length) return;
+        pushHistory(state);
+        const original = state.chart.lines[lineIndex];
+        const duplicated = JSON.parse(JSON.stringify(original));
+        duplicated.name = (duplicated.name || `Line ${lineIndex}`) + " (copy)";
+        state.chart.lines.splice(lineIndex + 1, 0, duplicated);
       }),
     ),
 
@@ -445,6 +489,65 @@ export const useChartStore = create<ChartState>()((set, get) => ({
   },
 
   getChartJson: () => JSON.stringify(get().chart),
+
+  // ---- Event layer mutations ----
+
+  addEventToLayer: (lineIndex, layerIndex, kind, event) =>
+    set(
+      produce((state: ChartState) => {
+        const line = state.chart.lines[lineIndex];
+        if (!line || !line.event_layers) return;
+        if (layerIndex < 0 || layerIndex >= line.event_layers.length) return;
+        pushHistory(state);
+        const events = getLayerEvents(line.event_layers[layerIndex], kind);
+        events.push(event);
+        sortEvents(events);
+      }),
+    ),
+
+  removeEventsFromLayer: (lineIndex, layerIndex, kind, eventIndices) =>
+    set(
+      produce((state: ChartState) => {
+        const line = state.chart.lines[lineIndex];
+        if (!line || !line.event_layers) return;
+        if (layerIndex < 0 || layerIndex >= line.event_layers.length) return;
+        if (eventIndices.length === 0) return;
+        pushHistory(state);
+        const events = getLayerEvents(line.event_layers[layerIndex], kind);
+        const sorted = [...eventIndices].sort((a, b) => b - a);
+        for (const idx of sorted) {
+          if (idx >= 0 && idx < events.length) {
+            events.splice(idx, 1);
+          }
+        }
+      }),
+    ),
+
+  editEventInLayer: (lineIndex, layerIndex, kind, eventIndex, changes) =>
+    set(
+      produce((state: ChartState) => {
+        const line = state.chart.lines[lineIndex];
+        if (!line || !line.event_layers) return;
+        if (layerIndex < 0 || layerIndex >= line.event_layers.length) return;
+        const events = getLayerEvents(line.event_layers[layerIndex], kind);
+        if (eventIndex < 0 || eventIndex >= events.length) return;
+        pushHistory(state);
+        Object.assign(events[eventIndex], changes);
+        sortEvents(events);
+      }),
+    ),
+
+  ensureEventLayers: (lineIndex) =>
+    set(
+      produce((state: ChartState) => {
+        const line = state.chart.lines[lineIndex];
+        if (!line) return;
+        if (!line.event_layers || line.event_layers.length === 0) {
+          pushHistory(state);
+          line.event_layers = [createEmptyLayer()];
+        }
+      }),
+    ),
 
   // ---- Curve note track mutations ----
 

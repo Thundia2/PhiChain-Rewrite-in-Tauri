@@ -4,7 +4,8 @@ import { useAudioStore } from "../../stores/audioStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useTabStore } from "../../stores/tabStore";
 import { audioEngine } from "../../audio/audioEngine";
-import { isTauri, pickFile, createProject } from "../../utils/ipc";
+import { isTauri, pickFile, createProject, loadProject } from "../../utils/ipc";
+import { saveSession, registerSession, setSkipNextSave } from "../../utils/chartSessions";
 import type { ProjectMeta, PhichainChart } from "../../types/chart";
 
 interface Props {
@@ -22,9 +23,12 @@ export function NewProjectDialog({ open, onClose }: Props) {
   });
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [musicPath, setMusicPath] = useState<string | null>(null);
+  const [illustrationFile, setIllustrationFile] = useState<File | null>(null);
+  const [illustrationPath, setIllustrationPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const illustrationInputRef = useRef<HTMLInputElement>(null);
 
   if (!open) return null;
 
@@ -60,8 +64,33 @@ export function NewProjectDialog({ open, onClose }: Props) {
     }
   };
 
+  const handlePickIllustration = async () => {
+    if (isTauri()) {
+      const path = await pickFile([
+        { name: "Image", extensions: ["png", "jpg", "jpeg", "webp"] },
+      ]);
+      if (path) {
+        setIllustrationPath(path);
+        setIllustrationFile(null);
+        setError(null);
+      }
+    } else {
+      illustrationInputRef.current?.click();
+    }
+  };
+
+  const handleIllustrationFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setIllustrationFile(file);
+      setIllustrationPath(null);
+      setError(null);
+    }
+  };
+
   const hasMusic = musicFile !== null || musicPath !== null;
   const musicName = musicFile?.name ?? musicPath?.split(/[\\/]/).pop() ?? null;
+  const illustrationName = illustrationFile?.name ?? illustrationPath?.split(/[\\/]/).pop() ?? null;
 
   const handleCreate = async () => {
     setCreating(true);
@@ -70,11 +99,56 @@ export function NewProjectDialog({ open, onClose }: Props) {
     try {
       let musicUrl: string | null = null;
 
+      // Save the current chart's session before loading a new one
+      const currentChartTabs = useTabStore.getState().tabs.filter((t) => t.type === "chart");
+      const currentActiveTab = useTabStore.getState().tabs.find(
+        (t) => t.id === useTabStore.getState().activeTabId,
+      );
+      if (currentActiveTab?.type === "chart" && useChartStore.getState().isLoaded) {
+        saveSession(currentActiveTab.id);
+      } else if (currentChartTabs.length > 0 && useChartStore.getState().isLoaded) {
+        // Save under the last chart tab if we're not on a chart tab
+        saveSession(currentChartTabs[currentChartTabs.length - 1].id);
+      }
+
+      // Tell the session manager to skip the automatic save on tab switch
+      // because we already saved the session above
+      setSkipNextSave();
+
       if (isTauri() && musicPath) {
-        // Tauri path: create project on disk via backend
+        // Tauri path: create project on disk, then load it
         const folderPath = musicPath.replace(/[\\/][^\\/]+$/, "") + "/" + (meta.name || "new-chart");
-        await createProject(folderPath, meta, musicPath);
-        // TODO: load the created project
+        await createProject(folderPath, meta, musicPath, illustrationPath ?? undefined);
+
+        // Load the created project into the editor
+        const projectData = await loadProject(folderPath);
+        const cs = useChartStore.getState();
+        cs.loadFromProjectData(projectData);
+
+        // Load music from the project directory
+        if (projectData.music_path) {
+          const { convertFileSrc } = await import("@tauri-apps/api/core");
+          const url = convertFileSrc(projectData.music_path);
+          const ext = projectData.music_path.split(".").pop()?.toLowerCase() ?? "mp3";
+          await audioEngine.load(url, ext);
+          useAudioStore.getState().setMusicLoaded(true);
+        }
+
+        // Load illustration from the project directory
+        if (projectData.illustration_path) {
+          const { convertFileSrc } = await import("@tauri-apps/api/core");
+          const illustUrl = convertFileSrc(projectData.illustration_path);
+          await cs.loadIllustration(illustUrl);
+        }
+
+        // Select the first line
+        useEditorStore.getState().selectLine(0);
+
+        // Open chart tab and register session
+        const tabId = `chart:${folderPath}`;
+        useTabStore.getState().openChart(folderPath, meta.name || "Untitled Chart");
+        registerSession(tabId);
+
         onClose();
         return;
       }
@@ -86,6 +160,12 @@ export function NewProjectDialog({ open, onClose }: Props) {
         await audioEngine.load(objectUrl, ext);
         useAudioStore.getState().setMusicLoaded(true);
         musicUrl = objectUrl;
+      }
+
+      // Load illustration from file (browser mode)
+      let illustrationUrl: string | null = null;
+      if (illustrationFile) {
+        illustrationUrl = URL.createObjectURL(illustrationFile);
       }
 
       // Create a default chart with one line
@@ -145,11 +225,20 @@ export function NewProjectDialog({ open, onClose }: Props) {
         illustration_path: null,
       });
 
+      // Load illustration into chart store (browser mode)
+      if (illustrationUrl) {
+        await cs.loadIllustration(illustrationUrl);
+      }
+
       // Select the first line
       useEditorStore.getState().selectLine(0);
 
-      // Open a chart tab
-      useTabStore.getState().openChart("default", meta.name || "Untitled Chart");
+      // Open a chart tab and register session
+      // Use a unique ID so multiple browser-mode charts don't collide
+      const chartId = `browser-${Date.now()}`;
+      const tabId = `chart:${chartId}`;
+      useTabStore.getState().openChart(chartId, meta.name || "Untitled Chart");
+      registerSession(tabId);
 
       onClose();
     } catch (e) {
@@ -220,6 +309,38 @@ export function NewProjectDialog({ open, onClose }: Props) {
               accept="audio/*"
               className="hidden"
               onChange={handleFileInput}
+            />
+          </div>
+
+          {/* Illustration file selection */}
+          <div>
+            <label className="text-xs block mb-1" style={{ color: "var(--text-muted)" }}>
+              Illustration (optional)
+            </label>
+            <div className="flex gap-2">
+              <button
+                className="px-3 py-1.5 rounded text-xs"
+                style={{
+                  backgroundColor: "var(--accent-primary)",
+                  color: "white",
+                }}
+                onClick={handlePickIllustration}
+              >
+                Choose File
+              </button>
+              <span
+                className="flex-1 truncate text-xs py-1.5"
+                style={{ color: illustrationName ? "var(--text-primary)" : "var(--text-muted)" }}
+              >
+                {illustrationName ?? "No file selected"}
+              </span>
+            </div>
+            <input
+              ref={illustrationInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={handleIllustrationFileInput}
             />
           </div>
 

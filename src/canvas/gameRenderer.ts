@@ -17,14 +17,45 @@
 //   - Pending/ghost note preview
 // ============================================================
 
-import type { Line, Note, Beat, LineEvent } from "../types/chart";
+import type { Line, Note, Beat, LineEvent, NoteControlEntry, NoteKind } from "../types/chart";
 import { CANVAS_WIDTH, CANVAS_HEIGHT, beatToFloat } from "../types/chart";
-import { evaluateLineEvents, distanceAt } from "./events";
+import { evaluateLineEvents, evaluateLineEventsWithLayers, distanceAt } from "./events";
+import { evaluateEasing } from "./easings";
 import { BpmList } from "../utils/bpmList";
 import { generateCurveNotes } from "../utils/curveNoteTrack";
 import type { HitEffectManager } from "./hitEffects";
 import type { PendingNote } from "../stores/editorStore";
 import type { LoadedRespack, HoldTextureParts } from "../utils/respackLoader";
+
+// ============================================================
+// Render result types — screen positions for hit-testing
+// ============================================================
+
+export interface RenderedNoteInfo {
+  noteIndex: number;
+  screenX: number;     // absolute pixel X after line transform
+  screenY: number;     // absolute pixel Y after line transform
+  width: number;       // rendered width in pixels
+  height: number;      // rendered height in pixels
+  kind: NoteKind;
+  above: boolean;
+  beat: number;        // float beat value
+}
+
+export interface RenderedLineInfo {
+  lineIndex: number;
+  screenX: number;     // line center pixel X
+  screenY: number;     // line center pixel Y
+  rotation: number;    // radians
+  opacity: number;     // 0.0–1.0
+  scaleX: number;
+  scaleY: number;
+  notes: RenderedNoteInfo[];
+}
+
+export interface RenderResult {
+  lines: RenderedLineInfo[];
+}
 
 // ============================================================
 // Rendering constants
@@ -49,6 +80,38 @@ const PERFECT_COLOR = "#feffa9";
 
 /** Selected note color */
 const SELECTED_COLOR = "#32cd32";
+
+/**
+ * Evaluate a note control array at a given position.
+ * Control entries define how a property is modified based on distance from the line.
+ * Each entry: { x: normalized position 0-1, easing, value }.
+ * We interpolate between entries using the specified easing.
+ * Returns 1.0 (no modification) if no control entries exist.
+ */
+function evaluateNoteControl(controls: NoteControlEntry[] | undefined, position: number): number {
+  if (!controls || controls.length === 0) return 1.0;
+  if (controls.length === 1) return controls[0].value;
+
+  // Clamp position to [0, 1]
+  const t = Math.max(0, Math.min(1, position));
+
+  // Find the two surrounding control points
+  for (let i = 0; i < controls.length - 1; i++) {
+    const a = controls[i];
+    const b = controls[i + 1];
+    if (t >= a.x && t <= b.x) {
+      const range = b.x - a.x;
+      if (range <= 0) return a.value;
+      const localT = (t - a.x) / range;
+      const easedT = evaluateEasing(a.easing, localT);
+      return a.value + (b.value - a.value) * easedT;
+    }
+  }
+
+  // Outside range — use nearest endpoint
+  if (t <= controls[0].x) return controls[0].value;
+  return controls[controls.length - 1].value;
+}
 
 // ============================================================
 // Renderer
@@ -97,17 +160,33 @@ export interface RenderOptions {
 
   // Resource pack (note textures, hit effect sprites)
   respack?: LoadedRespack | null;
+
+  // Lines to skip rendering (for unified editor visibility toggles)
+  hiddenLineIndices?: Set<number> | null;
 }
 
 export class GameRenderer {
   private ctx: CanvasRenderingContext2D;
+  private textureCache: Map<string, HTMLImageElement | null> = new Map();
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
 
+  /** Load a line texture into the cache. Call once per unique texture path. */
+  loadLineTexture(path: string, image: HTMLImageElement): void {
+    this.textureCache.set(path, image);
+  }
+
+  /** Check if a line texture is cached. */
+  hasLineTexture(path: string): boolean {
+    return this.textureCache.has(path);
+  }
+
   /**
    * Render a single frame of the game preview.
+   * Returns a RenderResult with computed screen positions for all lines and notes,
+   * enabling post-render hit-testing without re-evaluating events.
    */
   render(
     lines: Line[],
@@ -117,7 +196,7 @@ export class GameRenderer {
     canvasWidth: number,
     canvasHeight: number,
     options: RenderOptions = {},
-  ) {
+  ): RenderResult {
     const ctx = this.ctx;
     const noteScale = options.noteSize ?? 1.0;
 
@@ -175,13 +254,32 @@ export class GameRenderer {
       }
     }
 
-    // ---- Render each line ----
-    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      this.renderLine(
+    // ---- Render each line (sorted by z_order, lower = further back) ----
+    const lineOrder = lines.map((_, i) => i)
+      .sort((a, b) => (lines[a].z_order ?? 0) - (lines[b].z_order ?? 0));
+
+    const renderResult: RenderResult = { lines: [] };
+
+    for (const lineIdx of lineOrder) {
+      // Skip hidden lines (unified editor visibility toggles)
+      if (options.hiddenLineIndices?.has(lineIdx)) {
+        // Push placeholder to keep indices aligned
+        renderResult.lines.push({
+          lineIndex: lineIdx,
+          screenX: 0, screenY: 0, rotation: 0, opacity: 0, scaleX: 1, scaleY: 1,
+          notes: [],
+        });
+        continue;
+      }
+
+      const lineInfo = this.renderLine(
         ctx, lines[lineIdx], lineIdx, currentBeat, time, bpmTimeAt,
         canvasWidth, canvasHeight, distanceScale, noteW, noteH,
         options, multiBeats,
       );
+      if (lineInfo) {
+        renderResult.lines.push(lineInfo);
+      }
     }
 
     // ---- Hit effects (rendered on top of everything, in screen space) ----
@@ -195,6 +293,8 @@ export class GameRenderer {
         options.chartName ?? "", options.chartLevel ?? "",
         canvasWidth, canvasHeight);
     }
+
+    return renderResult;
   }
 
   private renderLine(
@@ -211,15 +311,36 @@ export class GameRenderer {
     noteH: number,
     options: RenderOptions,
     multiBeats: Set<number> | null,
-  ) {
-    const state = evaluateLineEvents(line.events, currentBeat);
+  ): RenderedLineInfo | null {
+    const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
 
     const screenX = canvasWidth / 2 + (state.x / CANVAS_WIDTH) * canvasWidth;
     const screenY = canvasHeight / 2 - (state.y / CANVAS_HEIGHT) * canvasHeight;
 
+    // Collect position data for RenderResult
+    const renderedNotes: RenderedNoteInfo[] = [];
+    const lineInfo: RenderedLineInfo = {
+      lineIndex,
+      screenX,
+      screenY,
+      rotation: state.rotation,
+      opacity: state.opacity,
+      scaleX: state.scale_x,
+      scaleY: state.scale_y,
+      notes: renderedNotes,
+    };
+
     ctx.save();
     ctx.translate(screenX, screenY);
     ctx.rotate(-state.rotation);
+
+    // Apply extended transforms
+    if (state.scale_x !== 1 || state.scale_y !== 1) {
+      ctx.scale(state.scale_x, state.scale_y);
+    }
+    if (state.incline !== 0) {
+      ctx.transform(1, Math.tan(state.incline * Math.PI / 180), 0, 1, 0, 0);
+    }
 
     const speedEvents = line.events.filter((e) => e.kind === "speed");
     const currentDistance = distanceAt(speedEvents, currentTime, bpmTimeAt);
@@ -240,28 +361,87 @@ export class GameRenderer {
         const holdBeatF = note.hold_beat ? beatToFloat(note.hold_beat) : 0;
         if (noteBeatF + holdBeatF < currentBeat) continue;
 
+        // visibleTime: skip if note isn't visible yet
+        const visibleTime = note.visible_time ?? 999999;
+        if (noteTime - currentTime > visibleTime) continue;
+
         const noteDistance = distanceAt(speedEvents, noteTime, bpmTimeAt);
         const yOffset = (note.y_offset ?? 0) * 2 / CANVAS_HEIGHT * note.speed * distanceScale;
         const rawY = (noteDistance - currentDistance) * note.speed * distanceScale + yOffset;
         const noteX = (note.x / CANVAS_WIDTH) * canvasWidth;
+
+        // Per-note size and alpha
+        let noteSizeMul = note.size ?? 1.0;
+        let noteAlpha = (note.alpha ?? 255) / 255;
+        let noteXOffset = 0;
+
+        // Apply note controls based on normalized distance from line
+        const controlPos = Math.max(0, Math.min(1, rawY / (canvasHeight * 2)));
+        if (line.pos_control) noteXOffset = evaluateNoteControl(line.pos_control, controlPos) - 1;
+        if (line.alpha_control) noteAlpha *= evaluateNoteControl(line.alpha_control, controlPos);
+        if (line.size_control) noteSizeMul *= evaluateNoteControl(line.size_control, controlPos);
+        if (line.y_control) {
+          const yMul = evaluateNoteControl(line.y_control, controlPos);
+          // y_control scales the vertical distance from line
+        }
+
+        const scaledNoteW = noteW * noteSizeMul;
+        const scaledNoteH = noteH * noteSizeMul;
 
         // Determine note color
         const isSelected = selectedSet?.has(noteIdx) ?? false;
         const isMulti = multiBeats?.has(noteBeatF) ?? false;
         const color = this.getNoteColor(note, isSelected, options);
 
+        // Apply per-note alpha
+        const prevAlpha = ctx.globalAlpha;
+        if (noteAlpha < 1) ctx.globalAlpha = noteAlpha;
+
+        // Apply pos_control offset to X
+        const finalNoteX = noteX + noteXOffset * canvasWidth;
+
         if (note.kind === "hold" && note.hold_beat) {
           this.drawHoldNote(
-            ctx, note, rawY, noteX, noteW, noteH, color,
+            ctx, note, rawY, finalNoteX, scaledNoteW, scaledNoteH, color,
             currentDistance, distanceScale, speedEvents, bpmTimeAt,
             canvasHeight, isMulti, options.respack,
           );
+          // Collect hold note head position for hit-testing
+          const holdScreenNoteY = note.above ? -Math.max(rawY, 0) : Math.max(rawY, 0);
+          const cos = Math.cos(-state.rotation);
+          const sin = Math.sin(-state.rotation);
+          renderedNotes.push({
+            noteIndex: noteIdx,
+            screenX: screenX + (finalNoteX * cos - holdScreenNoteY * sin) * state.scale_x,
+            screenY: screenY + (finalNoteX * sin + holdScreenNoteY * cos) * state.scale_y,
+            width: scaledNoteW,
+            height: scaledNoteH,
+            kind: note.kind,
+            above: note.above,
+            beat: noteBeatF,
+          });
         } else {
-          if (rawY < 0) continue;
+          if (rawY < 0) { ctx.globalAlpha = prevAlpha; continue; }
           const screenNoteY = note.above ? -rawY : rawY;
-          if (Math.abs(screenNoteY) > canvasHeight * 2) continue;
-          this.drawNote(ctx, note, noteX, screenNoteY, noteW, noteH, color, isMulti, options.respack);
+          if (Math.abs(screenNoteY) > canvasHeight * 2) { ctx.globalAlpha = prevAlpha; continue; }
+          this.drawNote(ctx, note, finalNoteX, screenNoteY, scaledNoteW, scaledNoteH, color, isMulti, options.respack);
+
+          // Collect note position for hit-testing (transform local to absolute)
+          const cos = Math.cos(-state.rotation);
+          const sin = Math.sin(-state.rotation);
+          renderedNotes.push({
+            noteIndex: noteIdx,
+            screenX: screenX + (finalNoteX * cos - screenNoteY * sin) * state.scale_x,
+            screenY: screenY + (finalNoteX * sin + screenNoteY * cos) * state.scale_y,
+            width: scaledNoteW,
+            height: scaledNoteH,
+            kind: note.kind,
+            above: note.above,
+            beat: noteBeatF,
+          });
         }
+
+        ctx.globalAlpha = prevAlpha;
 
         // Hit effect spawning
         if (options.hitEffectManager && options.isPlaying && options.showHitEffects !== false) {
@@ -317,10 +497,10 @@ export class GameRenderer {
 
       if (pnRawY >= 0) {
         const pnX = (pn.x / CANVAS_WIDTH) * canvasWidth;
-        const pnScreenY = -pnRawY; // Default above
+        const pnScreenY = pn.above ? -pnRawY : pnRawY;
         const pnColor = NOTE_COLORS[pn.kind] ?? "#ffffff";
         ctx.globalAlpha = 40 / 255; // Very faint ghost
-        this.drawNoteShape(ctx, { kind: pn.kind, above: true } as Note, pnX, pnScreenY, noteW, noteH, pnColor, options.respack);
+        this.drawNoteShape(ctx, { kind: pn.kind, above: pn.above } as Note, pnX, pnScreenY, noteW, noteH, pnColor, options.respack);
         ctx.globalAlpha = 1;
       }
     }
@@ -329,8 +509,37 @@ export class GameRenderer {
     if (state.opacity > 0) {
       const lineHalfW = canvasWidth * 1.5;
       ctx.globalAlpha = state.opacity;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(-lineHalfW, -LINE_THICKNESS / 2, lineHalfW * 2, LINE_THICKNESS);
+
+      // Try custom line texture first
+      const lineTexture = line.texture ? this.textureCache.get(line.texture) : null;
+      if (lineTexture) {
+        const texAspect = lineTexture.naturalHeight / lineTexture.naturalWidth;
+        const texW = lineHalfW * 2;
+        const texH = texW * texAspect;
+        const anchor = line.anchor ?? [0.5, 0.5];
+        ctx.drawImage(lineTexture,
+          -texW * anchor[0], -texH * anchor[1],
+          texW, texH);
+      } else {
+        // Default white line (or colored)
+        if (state.color) {
+          ctx.fillStyle = `rgb(${state.color[0]}, ${state.color[1]}, ${state.color[2]})`;
+        } else {
+          ctx.fillStyle = "#ffffff";
+        }
+        ctx.fillRect(-lineHalfW, -LINE_THICKNESS / 2, lineHalfW * 2, LINE_THICKNESS);
+      }
+
+      // Draw text event if present
+      if (state.text) {
+        ctx.font = "14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = state.color
+          ? `rgb(${state.color[0]}, ${state.color[1]}, ${state.color[2]})`
+          : "#ffffff";
+        ctx.fillText(state.text, 0, 0);
+      }
       ctx.globalAlpha = 1;
     }
 
@@ -359,6 +568,38 @@ export class GameRenderer {
         options, multiBeats,
       );
     }
+
+    return lineInfo;
+  }
+
+  /**
+   * Hit-test notes using pre-computed RenderResult positions.
+   * Returns the line index and note index of the topmost note at the click position, or null.
+   * Checks in reverse order (topmost/last-rendered first).
+   */
+  hitTestNote(
+    clickX: number,
+    clickY: number,
+    renderResult: RenderResult,
+    hitRadius: number = 12,
+  ): { lineIndex: number; noteIndex: number } | null {
+    // Check in reverse z-order (topmost line first)
+    for (let i = renderResult.lines.length - 1; i >= 0; i--) {
+      const lineInfo = renderResult.lines[i];
+      // Check notes in reverse order (last drawn = on top)
+      for (let j = lineInfo.notes.length - 1; j >= 0; j--) {
+        const noteInfo = lineInfo.notes[j];
+        const dx = clickX - noteInfo.screenX;
+        const dy = clickY - noteInfo.screenY;
+        // Use note dimensions for more accurate hit testing
+        const halfW = Math.max(noteInfo.width / 2, hitRadius);
+        const halfH = Math.max(noteInfo.height / 2, hitRadius);
+        if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) {
+          return { lineIndex: lineInfo.lineIndex, noteIndex: noteInfo.noteIndex };
+        }
+      }
+    }
+    return null;
   }
 
   /** Determine the color for a note based on selection and FC/AP state */
@@ -563,7 +804,7 @@ export class GameRenderer {
 
     // Iterate in reverse so topmost (last-drawn) line wins
     for (let i = lines.length - 1; i >= 0; i--) {
-      const state = evaluateLineEvents(lines[i].events, currentBeat);
+      const state = evaluateLineEventsWithLayers(lines[i].events, lines[i].event_layers, currentBeat);
       if (state.opacity <= 0) continue;
 
       const screenX = canvasWidth / 2 + (state.x / CANVAS_WIDTH) * canvasWidth;
@@ -571,10 +812,12 @@ export class GameRenderer {
 
       const dx = clickX - screenX;
       const dy = clickY - screenY;
-      const cos = Math.cos(state.rotation);
-      const sin = Math.sin(state.rotation);
-      const localX = dx * cos - dy * sin;
-      const localY = dx * sin + dy * cos;
+      // The renderer draws lines with ctx.rotate(-state.rotation), so we must
+      // use the same negated angle to transform screen coords back to line-local space.
+      const cos = Math.cos(-state.rotation);
+      const sin = Math.sin(-state.rotation);
+      const localX = dx * cos + dy * sin;
+      const localY = -dx * sin + dy * cos;
 
       if (Math.abs(localX) <= lineHalfW && Math.abs(localY) <= hitThreshold) {
         return i;

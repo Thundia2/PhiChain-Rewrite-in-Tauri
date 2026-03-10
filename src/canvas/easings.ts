@@ -228,10 +228,19 @@ export function evaluateEasing(easing: EasingType, t: number): number {
  * @param end - Ending value
  * @param t - Progress from 0.0 to 1.0
  * @param easing - The easing type
+ * @param easingLeft - Sub-range start (0.0-1.0, default 0.0) — clips easing curve
+ * @param easingRight - Sub-range end (0.0-1.0, default 1.0) — clips easing curve
  * @returns The interpolated value
  */
-export function tween(start: number, end: number, t: number, easing: EasingType): number {
-  const easedT = evaluateEasing(easing, t);
+export function tween(
+  start: number, end: number, t: number, easing: EasingType,
+  easingLeft?: number, easingRight?: number,
+): number {
+  const left = easingLeft ?? 0.0;
+  const right = easingRight ?? 1.0;
+  // Remap t from [0,1] to [left, right] sub-range before applying easing
+  const clippedT = left + t * (right - left);
+  const easedT = evaluateEasing(easing, clippedT);
   return start + (end - start) * easedT;
 }
 

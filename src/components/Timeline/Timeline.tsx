@@ -153,6 +153,16 @@ export function Timeline() {
       }
       const bpmList = bpmListRef.current!;
       const currentBeat = bpmList.beatAtFloat(currentTime - c.offset);
+
+      // Auto-follow: scroll to keep current beat in view during playback
+      const { isPlaying } = useAudioStore.getState();
+      if (isPlaying && useSettingsStore.getState().timelineFollowPlayback) {
+        const pxPerBeat = BASE_PX_PER_BEAT * es.timelineZoom;
+        const visibleBeats = rect.height / pxPerBeat;
+        const targetScroll = currentBeat - visibleBeats * 0.35;
+        setScrollBeat(Math.max(0, Math.min(targetScroll, maxBeatRef.current)));
+      }
+
       const line = es.selectedLineIndex !== null ? c.lines[es.selectedLineIndex] : null;
 
       renderer.render({
@@ -313,7 +323,7 @@ export function Timeline() {
       const clickBeat = TimelineRenderer.yToBeat(y, scrollBeatRef.current, es.timelineZoom, rect.height);
       const snappedBeat = snapBeat(clickBeat, es.density);
       const noteX = TimelineRenderer.pixelToNoteX(x, noteAreaLeft, noteAreaWidth);
-      es.setPendingNote({ beat: snappedBeat, x: Math.round(noteX), kind: noteKind });
+      es.setPendingNote({ beat: snappedBeat, x: Math.round(noteX), kind: noteKind, above: true });
     } else {
       if (es.pendingNote) es.setPendingNote(null);
     }
