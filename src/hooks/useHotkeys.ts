@@ -26,6 +26,10 @@ export function useGlobalHotkeys(callbacks: {
   useHotkeys("r", setTool("place_hold"), { preventDefault: true });
   useHotkeys("x", setTool("eraser"), { preventDefault: true });
 
+  // ---- Unified Editor panels ----
+  useHotkeys("l", () => useEditorStore.getState().toggleLineDrawer(), { preventDefault: true });
+  useHotkeys("i", () => useEditorStore.getState().toggleUnifiedInspector(), { preventDefault: true });
+
   // ---- Undo / Redo ----
   useHotkeys("ctrl+z, meta+z", () => useChartStore.getState().undo(), { preventDefault: true });
   useHotkeys("ctrl+shift+z, meta+shift+z", () => useChartStore.getState().redo(), { preventDefault: true });
@@ -190,5 +194,10 @@ export function useGlobalHotkeys(callbacks: {
         changes: { above: !line.notes[idx].above },
       })),
     );
+  }, { preventDefault: true });
+
+  // ---- Fit All (Shift+F) — zoom to fit all visible lines ----
+  useHotkeys("shift+f", () => {
+    useEditorStore.getState().resetCanvasViewport();
   }, { preventDefault: true });
 }

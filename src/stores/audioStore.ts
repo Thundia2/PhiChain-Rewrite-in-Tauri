@@ -40,6 +40,8 @@ export interface AudioState {
   setCurrentTime: (time: number) => void;
   setDuration: (duration: number) => void;
   setMusicLoaded: (loaded: boolean) => void;
+  /** Internal: set playback rate state without calling engine (avoids circular call) */
+  _setPlaybackRateInternal: (rate: number) => void;
 }
 
 export const useAudioStore = create<AudioState>()((set, get) => ({
@@ -72,7 +74,7 @@ export const useAudioStore = create<AudioState>()((set, get) => ({
   toggleHitSound: () =>
     set((state) => ({ hitSoundEnabled: !state.hitSoundEnabled })),
 
-  // ---- Internal setters (called by engine) ----
+  // ---- Internal setters (called by engine, NOT by UI directly) ----
   // These ONLY set state. They do NOT call back to the engine.
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
@@ -80,4 +82,5 @@ export const useAudioStore = create<AudioState>()((set, get) => ({
   setCurrentTime: (time) => set({ currentTime: time }),
   setDuration: (duration) => set({ duration }),
   setMusicLoaded: (loaded) => set({ musicLoaded: loaded }),
+  _setPlaybackRateInternal: (rate: number) => set({ playbackRate: rate }),
 }));

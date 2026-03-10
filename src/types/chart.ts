@@ -96,6 +96,12 @@ export interface Note {
   fake?: boolean;
   /** Vertical position offset in canvas units (RPE yOffset) */
   y_offset?: number;
+  /** Width/scale multiplier for the note (default 1.0) */
+  size?: number;
+  /** Per-note transparency 0-255 (default 255 = fully opaque) */
+  alpha?: number;
+  /** Seconds before hit time when note becomes visible (default 999999 = always) */
+  visible_time?: number;
 }
 
 // ------ Line Events ------
@@ -107,7 +113,13 @@ export type LineEventKind =
   | "y"        // Vertical position of the line
   | "rotation" // Rotation angle in degrees
   | "opacity"  // Transparency (0-255, where 255 = fully visible)
-  | "speed";   // Note fall speed multiplier
+  | "speed"    // Note fall speed multiplier
+  // Extended event types (RPE)
+  | "scale_x"  // Horizontal scale of the judgment line (default 1.0)
+  | "scale_y"  // Vertical scale of the judgment line (default 1.0)
+  | "color"    // RGB color tint of the line
+  | "text"     // Text displayed on the line
+  | "incline"; // Tilt/incline effect
 
 // The 30+ easing types supported by phichain.
 // See https://easings.net/ for visual reference.
@@ -129,13 +141,41 @@ export type EasingType =
 
 export type LineEventValue =
   | { transition: { start: number; end: number; easing: EasingType } }
-  | { constant: number };
+  | { constant: number }
+  // Extended value types for color and text events
+  | { color_transition: { start: [number, number, number]; end: [number, number, number]; easing: EasingType } }
+  | { color_constant: [number, number, number] }
+  | { text_value: string };
 
 export interface LineEvent {
   kind: LineEventKind;
   start_beat: Beat;
   end_beat: Beat;
   value: LineEventValue;
+  /** Easing sub-range start (0.0-1.0, default 0.0) — clips easing curve */
+  easing_left?: number;
+  /** Easing sub-range end (0.0-1.0, default 1.0) — clips easing curve */
+  easing_right?: number;
+}
+
+// ------ Event Layers ------
+// RPE supports up to 5 additive event layers per line.
+// Values from all layers are summed for the final result.
+export interface EventLayer {
+  move_x_events: LineEvent[];
+  move_y_events: LineEvent[];
+  rotate_events: LineEvent[];
+  alpha_events: LineEvent[];
+  speed_events: LineEvent[];
+}
+
+// ------ Note Controls ------
+// Per-line control arrays that globally affect all notes on that line
+// based on position. Evaluated at render time and stacked on per-note properties.
+export interface NoteControlEntry {
+  x: number;
+  easing: EasingType;
+  value: number;
 }
 
 // ------ Curve Note Tracks ------
@@ -159,6 +199,23 @@ export interface Line {
   events: LineEvent[];
   children: Line[];                    // Child lines (inherit parent transforms)
   curve_note_tracks: CurveNoteTrack[];
+  // RPE event layers (up to 5, additive). When present, takes precedence over flat events.
+  event_layers?: EventLayer[];
+  // RPE line properties
+  z_order?: number;                    // Render depth (default 0, higher = in front)
+  is_cover?: boolean;                  // Occlude passed notes (default true)
+  bpm_factor?: number;                 // Divides global BPM for this line (default 1.0)
+  group?: number;                      // Index into chart-level line_groups array
+  texture?: string;                    // Custom line texture image path
+  anchor?: [number, number];           // Texture pivot point (default [0.5, 0.5])
+  rotate_with_father?: boolean;        // Inherit parent rotation (default true)
+  father_index?: number;               // RPE flat parent index (-1 = none, for round-trip)
+  // Note control systems (RPE)
+  pos_control?: NoteControlEntry[];
+  alpha_control?: NoteControlEntry[];
+  size_control?: NoteControlEntry[];
+  skew_control?: NoteControlEntry[];
+  y_control?: NoteControlEntry[];
 }
 
 // ------ BPM List ------
@@ -175,6 +232,8 @@ export interface PhichainChart {
   offset: number;         // Audio offset in seconds
   bpm_list: BpmPoint[];
   lines: Line[];
+  /** RPE line group names (e.g. ["Default", "Background", "Effects"]) */
+  line_groups?: string[];
 }
 
 // ------ Project Metadata ------

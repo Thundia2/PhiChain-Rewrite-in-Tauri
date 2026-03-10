@@ -9,7 +9,7 @@
 
 import type { Line } from "../types/chart";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../types/chart";
-import { evaluateLineEvents } from "./events";
+import { evaluateLineEventsWithLayers } from "./events";
 
 // ============================================================
 // Constants
@@ -103,7 +103,7 @@ export class EventCanvasRenderer {
     this.drawGrid(canvasWidth, canvasHeight);
 
     // ---- Evaluate line state ----
-    const state = evaluateLineEvents(line.events, currentBeat);
+    const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
 
     // ---- Draw the line ----
     const screenX = this.canvasToScreenX(state.x, canvasWidth);

@@ -18,6 +18,9 @@ export type EditorTool =
 /** Which side of the line to show notes for in the timeline */
 export type NoteSideFilter = "all" | "above" | "below";
 
+/** How to sort lines in the LineList panel */
+export type LineSortMode = "chart_order" | "first_appearance" | "active_first";
+
 /** The panels/tabs available in the docking layout */
 export type PanelId =
   | "game-preview"
@@ -28,7 +31,8 @@ export type PanelId =
   | "timeline-settings"
   | "bpm-list"
   | "chart-settings"
-  | "hotkey-reference";
+  | "hotkey-reference"
+  | "validation";
 
 /** Keyboard shortcut definition */
 export interface HotkeyBinding {

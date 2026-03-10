@@ -8,7 +8,7 @@
 
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
-import { evaluateLineEvents } from "../../canvas/events";
+import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { Field, SelectField, BeatField, EASING_OPTIONS } from "../common/FormFields";
 import { beatToFloat, floatToBeat } from "../../types/chart";
 import type { LineEvent, LineEventKind, Beat, EasingType } from "../../types/chart";
@@ -68,7 +68,7 @@ export function EventInspector({ lineIndex }: EventInspectorProps) {
   }
 
   // Evaluate all properties at current beat
-  const state = evaluateLineEvents(line.events, currentBeat);
+  const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
 
   // Find the active event for the selected property
   const activeEventInfo = findActiveEvent(line.events, activeProperty, currentBeat);

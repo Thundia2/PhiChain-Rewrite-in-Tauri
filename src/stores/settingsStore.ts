@@ -1,9 +1,8 @@
 // ============================================================
 // Settings Store — Zustand
 //
-// Persistent editor preferences saved to disk via Tauri's
-// filesystem API. When running in the browser (no Tauri),
-// falls back to localStorage.
+// Persistent editor preferences saved to %appdata%/PhiChain_Tauri/
+// via appStorage. Falls back to localStorage in browser dev mode.
 //
 // Usage:
 //   const noteSize = useSettingsStore(s => s.noteSize);
@@ -11,6 +10,7 @@
 // ============================================================
 
 import { create } from "zustand";
+import { readJson, writeJson } from "../utils/appStorage";
 
 export interface SettingsState {
   // ---- General ----
@@ -30,9 +30,13 @@ export interface SettingsState {
 
   // ---- Timeline ----
   invertScrollDirection: boolean;
+  timelineFollowPlayback: boolean;
 
   // ---- Event Editor ----
   rotationSnapDegrees: number; // Snap angle interval in degrees (0 = off)
+
+  // ---- Editor ----
+  defaultEditorView: "unified" | "classic";
 
   // ---- Autosave ----
   autosaveEnabled: boolean;
@@ -60,7 +64,9 @@ const DEFAULTS: SettingsData = {
   anchorMarkerVisibility: "when_visible" as const,
   showHud: true,
   invertScrollDirection: false,
+  timelineFollowPlayback: true,
   rotationSnapDegrees: 15,
+  defaultEditorView: "unified" as const,
   autosaveEnabled: true,
   autosaveIntervalSeconds: 120,
 };
@@ -76,10 +82,19 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   loadSettings: async () => {
     try {
+      // Try new appStorage first
+      const saved = await readJson<Partial<SettingsData>>("settings.json");
+      if (saved) {
+        set({ ...DEFAULTS, ...saved });
+        return;
+      }
+      // Migration: fall back to old localStorage key
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<SettingsData>;
         set({ ...DEFAULTS, ...parsed });
+        // Migrate to new location
+        await writeJson("settings.json", { ...DEFAULTS, ...parsed });
       }
     } catch {
       // Ignore parse errors, keep defaults
@@ -100,11 +115,13 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         anchorMarkerVisibility: state.anchorMarkerVisibility,
         showHud: state.showHud,
         invertScrollDirection: state.invertScrollDirection,
+        timelineFollowPlayback: state.timelineFollowPlayback,
         rotationSnapDegrees: state.rotationSnapDegrees,
+        defaultEditorView: state.defaultEditorView,
         autosaveEnabled: state.autosaveEnabled,
         autosaveIntervalSeconds: state.autosaveIntervalSeconds,
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      await writeJson("settings.json", data);
     } catch {
       // Ignore storage errors
     }

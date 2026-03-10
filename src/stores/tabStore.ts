@@ -11,8 +11,9 @@
 // ============================================================
 
 import { create } from "zustand";
+import { useSettingsStore } from "./settingsStore";
 
-export type TabType = "home" | "chart" | "settings" | "line_event_editor";
+export type TabType = "home" | "chart" | "settings" | "line_event_editor" | "panel" | "unified_editor";
 
 export interface Tab {
   id: string;
@@ -35,6 +36,8 @@ export interface TabState {
   openSettings: () => void;
   openChart: (chartId: string, label: string) => void;
   openLineEventEditor: (lineIndex: number, lineName: string) => void;
+  openPanel: (panelId: string, label: string) => void;
+  openUnifiedEditor: () => void;
 }
 
 const HOME_TAB: Tab = { id: "home", type: "home", label: "Home", closable: false };
@@ -84,12 +87,23 @@ export const useTabStore = create<TabState>()((set, get) => ({
   },
 
   openChart: (chartId, label) => {
-    get().openTab({
-      id: `chart:${chartId}`,
-      type: "chart",
-      label: label || "Untitled Chart",
-      closable: true,
-    });
+    const defaultView = useSettingsStore.getState().defaultEditorView;
+    if (defaultView === "unified") {
+      // Open the unified editor tab for this chart
+      get().openTab({
+        id: "unified-editor",
+        type: "unified_editor",
+        label: label || "Unified Editor",
+        closable: true,
+      });
+    } else {
+      get().openTab({
+        id: `chart:${chartId}`,
+        type: "chart",
+        label: label || "Untitled Chart",
+        closable: true,
+      });
+    }
   },
 
   openLineEventEditor: (lineIndex, lineName) => {
@@ -99,6 +113,25 @@ export const useTabStore = create<TabState>()((set, get) => ({
       label: `Events: ${lineName}`,
       closable: true,
       data: { lineIndex },
+    });
+  },
+
+  openPanel: (panelId, label) => {
+    get().openTab({
+      id: `panel:${panelId}`,
+      type: "panel",
+      label,
+      closable: true,
+      data: { panelId },
+    });
+  },
+
+  openUnifiedEditor: () => {
+    get().openTab({
+      id: "unified-editor",
+      type: "unified_editor",
+      label: "Unified Editor",
+      closable: true,
     });
   },
 }));
