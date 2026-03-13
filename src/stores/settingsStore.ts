@@ -19,10 +19,12 @@ export interface SettingsState {
   // ---- Audio ----
   musicVolume: number; // 0.0 - 1.0
   hitSoundVolume: number; // 0.0 - 1.0
+  hitSoundEnabled: boolean;
 
   // ---- Game preview ----
   noteSize: number;
   backgroundDim: number; // 0.0 - 1.0
+  showHitEffects: boolean;
   showFcApIndicator: boolean;
   multiHighlight: boolean;
   anchorMarkerVisibility: "never" | "always" | "when_visible";
@@ -57,8 +59,10 @@ const DEFAULTS: SettingsData = {
   language: "en",
   musicVolume: 0.8,
   hitSoundVolume: 0.6,
+  hitSoundEnabled: true,
   noteSize: 1.0,
   backgroundDim: 0.6,
+  showHitEffects: true,
   showFcApIndicator: true,
   multiHighlight: true,
   anchorMarkerVisibility: "when_visible" as const,
@@ -108,8 +112,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         language: state.language,
         musicVolume: state.musicVolume,
         hitSoundVolume: state.hitSoundVolume,
+        hitSoundEnabled: state.hitSoundEnabled,
         noteSize: state.noteSize,
         backgroundDim: state.backgroundDim,
+        showHitEffects: state.showHitEffects,
         showFcApIndicator: state.showFcApIndicator,
         multiHighlight: state.multiHighlight,
         anchorMarkerVisibility: state.anchorMarkerVisibility,

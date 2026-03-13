@@ -19,7 +19,7 @@ const LINE_THICKNESS = 4;
 const LINE_HALF_LENGTH = 200; // pixels at scale 1
 const HANDLE_RADIUS = 8;
 const ROTATION_HANDLE_RADIUS = 6;
-const ROTATION_HANDLE_DISTANCE = 80; // pixels from center
+// const ROTATION_HANDLE_DISTANCE = 80; // pixels from center
 const GRID_COLOR = "rgba(255, 255, 255, 0.06)";
 const AXIS_COLOR = "rgba(255, 255, 255, 0.15)";
 const LINE_COLOR = "#ffffff";
@@ -336,7 +336,7 @@ export class EventCanvasRenderer {
   private drawCoordinateLabel(
     ctx: CanvasRenderingContext2D,
     canvasWidth: number,
-    canvasHeight: number,
+    _canvasHeight: number,
     state: { x: number; y: number; rotation: number; opacity: number; speed: number },
     currentBeat: number,
   ): void {

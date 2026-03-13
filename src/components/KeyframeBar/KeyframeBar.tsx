@@ -19,6 +19,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useAudioStore } from "../../stores/audioStore";
+import { useGroupStore } from "../../stores/groupStore";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat, floatToBeat } from "../../types/chart";
 import type { Beat, LineEvent, LineEventKind, EasingType } from "../../types/chart";
@@ -33,7 +34,7 @@ const SPEED_PRESETS = [0.5, 0.75, 1.0];
 
 const KIND_SHORT: Record<string, string> = {
   x: "X", y: "Y", rotation: "R", opacity: "O", speed: "S",
-  scale_x: "SX", scale_y: "SY", color: "C", text: "T", incline: "I",
+  scale_x: "SX", scale_y: "SY", color: "C", text: "T", incline: "I", gif: "GIF",
 };
 
 const CORE_KINDS: LineEventKind[] = ["x", "y", "rotation", "opacity", "speed"];
@@ -44,7 +45,7 @@ const DIAMOND_HIT_RADIUS = 7; // slightly larger than render for easier clicking
 /** Default constant values when creating new events */
 const DEFAULT_VALUES: Record<string, number> = {
   x: 0, y: 0, rotation: 0, opacity: 255, speed: 1,
-  scale_x: 1, scale_y: 1, incline: 0,
+  scale_x: 1, scale_y: 1, incline: 0, gif: 0,
 };
 
 // ============================================================
@@ -324,26 +325,61 @@ export function KeyframeBar() {
         "scale_x", "scale_y", "color", "text", "incline",
       ];
 
-      // Determine display events based on active layer
+      // ---- Group mode: collect events from all member lines ----
+      const gs = useGroupStore.getState();
+      const activeGroup = gs.getActiveGroup();
+
+      // Tagged events: each event paired with its display color
+      type TaggedEvent = { event: LineEvent; color: string; globalIdx: number };
       let displayEvents: LineEvent[];
-      if (layerIdx >= 0 && line.event_layers && line.event_layers[layerIdx]) {
-        const layer = line.event_layers[layerIdx];
-        displayEvents = [
-          ...layer.move_x_events,
-          ...layer.move_y_events,
-          ...layer.rotate_events,
-          ...layer.alpha_events,
-          ...layer.speed_events,
-        ];
+      let taggedEvents: TaggedEvent[] | null = null;
+
+      if (activeGroup && activeGroup.type === "line") {
+        // Group mode: gather events from all member lines, filtered by visibleEventKinds
+        const visibleKinds = new Set(activeGroup.visibleEventKinds);
+        const memberColors = ["#ff6b6b", "#4dabf7", "#69db7c", "#ffd43b", "#da77f2", "#38d9a9", "#ffa94d", "#748ffc"];
+        const allGroupEvents: TaggedEvent[] = [];
+        const allGroupEventsRaw: LineEvent[] = [];
+
+        for (let mi = 0; mi < activeGroup.lines.length; mi++) {
+          const memberRef = activeGroup.lines[mi];
+          const memberLine = cs.chart.lines[memberRef.lineIndex];
+          if (!memberLine) continue;
+          const memberColor = memberColors[mi % memberColors.length];
+
+          for (const evt of memberLine.events) {
+            if (!visibleKinds.has(evt.kind)) continue;
+            const idx = allGroupEventsRaw.length;
+            allGroupEventsRaw.push(evt);
+            allGroupEvents.push({ event: evt, color: memberColor, globalIdx: idx });
+          }
+        }
+
+        displayEvents = allGroupEventsRaw;
+        taggedEvents = allGroupEvents;
       } else {
-        displayEvents = line.events;
+        // Normal mode: single line
+        if (layerIdx >= 0 && line.event_layers && line.event_layers[layerIdx]) {
+          const layer = line.event_layers[layerIdx];
+          displayEvents = [
+            ...layer.move_x_events,
+            ...layer.move_y_events,
+            ...layer.rotate_events,
+            ...layer.alpha_events,
+            ...layer.speed_events,
+          ];
+        } else {
+          displayEvents = line.events;
+        }
       }
 
       // Find which kinds have events (always show core 5)
       const activeKinds = allKinds.filter((kind) =>
         displayEvents.some((e) => e.kind === kind),
       );
-      const kinds = [...new Set([...CORE_KINDS, ...activeKinds])];
+      const kinds: LineEventKind[] = (activeGroup && activeGroup.type === "line")
+        ? [...new Set([...activeGroup.visibleEventKinds, ...activeKinds])]
+        : [...new Set([...CORE_KINDS, ...activeKinds])];
       const laneHeight = (height - 14) / kinds.length;
 
       // Selected event indices for highlight
@@ -360,50 +396,80 @@ export function KeyframeBar() {
         ctx.textAlign = "left";
         ctx.fillText(KIND_SHORT[kind] || kind.charAt(0).toUpperCase(), 3, cy + 3);
 
-        // Draw keyframes
-        const events = displayEvents.filter((e) => e.kind === kind);
-        for (const event of events) {
-          const startBeat = beatToFloat(event.start_beat);
-          const endBeat = beatToFloat(event.end_beat);
-          const startPx = beatToPixel(startBeat, width);
-          const endPx = beatToPixel(endBeat, width);
+        // Draw keyframes — use tagged events in group mode for per-member coloring
+        if (taggedEvents) {
+          const kindTagged = taggedEvents.filter((t) => t.event.kind === kind);
+          for (const tagged of kindTagged) {
+            const startBeat = beatToFloat(tagged.event.start_beat);
+            const endBeat = beatToFloat(tagged.event.end_beat);
+            const startPx = beatToPixel(startBeat, width);
+            const endPx = beatToPixel(endBeat, width);
+            if (endPx < 0 || startPx > width) continue;
 
-          // Cull off-screen events
-          if (endPx < 0 || startPx > width) continue;
+            const dColor = tagged.color;
+            const isTransition = "transition" in tagged.event.value || "color_transition" in tagged.event.value;
+            ctx.fillStyle = isTransition ? dColor + "30" : dColor + "15";
+            const barStart = Math.max(startPx, 0);
+            const barEnd = Math.min(endPx, width);
+            ctx.fillRect(barStart, cy - laneHeight * 0.35, barEnd - barStart, laneHeight * 0.7);
 
-          // Check if this event is selected
-          const globalIdx = displayEvents.indexOf(event);
-          const isSelected = selEvtIndices.has(globalIdx);
-
-          // Span bar
-          const isTransition = "transition" in event.value || "color_transition" in event.value;
-          ctx.fillStyle = isTransition ? kindColor + "30" : kindColor + "15";
-          const barStart = Math.max(startPx, 0);
-          const barEnd = Math.min(endPx, width);
-          ctx.fillRect(barStart, cy - laneHeight * 0.35, barEnd - barStart, laneHeight * 0.7);
-
-          // Start diamond
-          if (startPx >= -5 && startPx <= width + 5) {
-            // Selected highlight ring
-            if (isSelected) {
-              ctx.fillStyle = "#ffffff";
+            if (startPx >= -5 && startPx <= width + 5) {
+              ctx.fillStyle = dColor;
               ctx.beginPath();
-              ctx.moveTo(startPx, cy - DIAMOND_SIZE - 2);
-              ctx.lineTo(startPx + DIAMOND_SIZE + 2, cy);
-              ctx.lineTo(startPx, cy + DIAMOND_SIZE + 2);
-              ctx.lineTo(startPx - DIAMOND_SIZE - 2, cy);
+              ctx.moveTo(startPx, cy - DIAMOND_SIZE);
+              ctx.lineTo(startPx + DIAMOND_SIZE, cy);
+              ctx.lineTo(startPx, cy + DIAMOND_SIZE);
+              ctx.lineTo(startPx - DIAMOND_SIZE, cy);
               ctx.closePath();
               ctx.fill();
             }
+          }
+        } else {
+          // Normal mode rendering
+          const events = displayEvents.filter((e) => e.kind === kind);
+          for (const event of events) {
+            const startBeat = beatToFloat(event.start_beat);
+            const endBeat = beatToFloat(event.end_beat);
+            const startPx = beatToPixel(startBeat, width);
+            const endPx = beatToPixel(endBeat, width);
 
-            ctx.fillStyle = isSelected ? "#ffffff" : kindColor;
-            ctx.beginPath();
-            ctx.moveTo(startPx, cy - DIAMOND_SIZE);
-            ctx.lineTo(startPx + DIAMOND_SIZE, cy);
-            ctx.lineTo(startPx, cy + DIAMOND_SIZE);
-            ctx.lineTo(startPx - DIAMOND_SIZE, cy);
-            ctx.closePath();
-            ctx.fill();
+            // Cull off-screen events
+            if (endPx < 0 || startPx > width) continue;
+
+            // Check if this event is selected
+            const globalIdx = displayEvents.indexOf(event);
+            const isSelected = selEvtIndices.has(globalIdx);
+
+            // Span bar
+            const isTransition = "transition" in event.value || "color_transition" in event.value;
+            ctx.fillStyle = isTransition ? kindColor + "30" : kindColor + "15";
+            const barStart = Math.max(startPx, 0);
+            const barEnd = Math.min(endPx, width);
+            ctx.fillRect(barStart, cy - laneHeight * 0.35, barEnd - barStart, laneHeight * 0.7);
+
+            // Start diamond
+            if (startPx >= -5 && startPx <= width + 5) {
+              // Selected highlight ring
+              if (isSelected) {
+                ctx.fillStyle = "#ffffff";
+                ctx.beginPath();
+                ctx.moveTo(startPx, cy - DIAMOND_SIZE - 2);
+                ctx.lineTo(startPx + DIAMOND_SIZE + 2, cy);
+                ctx.lineTo(startPx, cy + DIAMOND_SIZE + 2);
+                ctx.lineTo(startPx - DIAMOND_SIZE - 2, cy);
+                ctx.closePath();
+                ctx.fill();
+              }
+
+              ctx.fillStyle = isSelected ? "#ffffff" : kindColor;
+              ctx.beginPath();
+              ctx.moveTo(startPx, cy - DIAMOND_SIZE);
+              ctx.lineTo(startPx + DIAMOND_SIZE, cy);
+              ctx.lineTo(startPx, cy + DIAMOND_SIZE);
+              ctx.lineTo(startPx - DIAMOND_SIZE, cy);
+              ctx.closePath();
+              ctx.fill();
+            }
           }
         }
       }
@@ -572,7 +638,7 @@ export function KeyframeBar() {
     if (!data) return;
 
     const { hit } = contextMenu;
-    const { lineIdx, layerIdx, displayEvents } = data;
+    const { lineIdx, layerIdx } = data;
 
     if (layerIdx >= 0) {
       // Find the event index within its kind's layer events
@@ -709,7 +775,7 @@ export function KeyframeBar() {
   return (
     <div
       style={{
-        height: 90,
+        height: "100%",
         display: "flex",
         flexDirection: "column",
         background: "var(--bg-accent)",
@@ -852,6 +918,23 @@ export function KeyframeBar() {
             Inspector {"\u25B8"}
           </button>
         )}
+
+        {/* Close keyframe bar */}
+        <button
+          onClick={() => useEditorStore.getState().toggleKeyframeBar()}
+          title="Close keyframe bar (K)"
+          style={{
+            background: "none",
+            border: "none",
+            color: "#555",
+            cursor: "pointer",
+            fontSize: 14,
+            padding: "0 4px",
+            fontFamily: "inherit",
+          }}
+        >
+          {"\u00D7"}
+        </button>
       </div>
 
       {/* ---- Row 2: Diamond strip (64px) ---- */}

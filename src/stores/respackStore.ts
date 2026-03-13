@@ -12,7 +12,7 @@
 
 import { create } from "zustand";
 import { extractRespack } from "../utils/respackLoader";
-import type { LoadedRespack, RespackConfig } from "../utils/respackLoader";
+import type { LoadedRespack } from "../utils/respackLoader";
 
 export type { LoadedRespack };
 
@@ -105,8 +105,8 @@ export const useRespackStore = create<RespackState>()((set, get) => ({
 
   importRespack: async (zipData: ArrayBuffer) => {
     const id = crypto.randomUUID();
-    const { config, textures } = await extractRespack(zipData);
-    const loaded: LoadedRespack = { id, config, textures };
+    const { config, textures, sounds } = await extractRespack(zipData);
+    const loaded: LoadedRespack = { id, config, textures, sounds };
 
     // Save to IndexedDB
     try {
@@ -167,8 +167,8 @@ export const useRespackStore = create<RespackState>()((set, get) => ({
 
       for (const entry of entries) {
         try {
-          const { config, textures } = await extractRespack(entry.zipData);
-          newMap.set(entry.id, { id: entry.id, config, textures });
+          const { config, textures, sounds } = await extractRespack(entry.zipData);
+          newMap.set(entry.id, { id: entry.id, config, textures, sounds });
         } catch (err) {
           console.warn(`Failed to load respack ${entry.id}:`, err);
         }

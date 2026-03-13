@@ -9,7 +9,7 @@
 //   - Notes outside canvas bounds
 // ============================================================
 
-import type { PhichainChart, Line, Note, LineEvent } from "../types/chart";
+import type { PhichainChart, Line, LineEvent } from "../types/chart";
 import { beatToFloat } from "../types/chart";
 
 export type ValidationSeverity = "error" | "warning" | "info";

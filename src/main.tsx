@@ -132,11 +132,11 @@ if (isTauri()) {
 
 // ---- Expose stores on window for debugging (dev only) ----
 if (import.meta.env.DEV) {
-  (window as Record<string, unknown>).__chartStore = useChartStore;
-  (window as Record<string, unknown>).__audioStore = useAudioStore;
-  (window as Record<string, unknown>).__editorStore = useEditorStore;
-  (window as Record<string, unknown>).__tabStore = useTabStore;
-  (window as Record<string, unknown>).__respackStore = useRespackStore;
+  (window as unknown as Record<string, unknown>).__chartStore = useChartStore;
+  (window as unknown as Record<string, unknown>).__audioStore = useAudioStore;
+  (window as unknown as Record<string, unknown>).__editorStore = useEditorStore;
+  (window as unknown as Record<string, unknown>).__tabStore = useTabStore;
+  (window as unknown as Record<string, unknown>).__respackStore = useRespackStore;
 }
 
 // Initialize respacks from IndexedDB (non-blocking)

@@ -28,8 +28,10 @@ const TOOLS: ToolDef[] = [
 export function Toolbar() {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setTool = useEditorStore((s) => s.setTool);
-  const drawerOpen = useEditorStore((s) => s.lineDrawerOpen);
-  const toggleDrawer = useEditorStore((s) => s.toggleLineDrawer);
+  const beatSyncPlacement = useEditorStore((s) => s.beatSyncPlacement);
+  const toggleBeatSync = useEditorStore((s) => s.toggleBeatSyncPlacement);
+  const canvasActivePanelId = useEditorStore((s) => s.canvasActivePanelId);
+  const setCanvasActivePanel = useEditorStore((s) => s.setCanvasActivePanel);
 
   return (
     <div
@@ -77,21 +79,58 @@ export function Toolbar() {
         );
       })}
 
+      {/* Divider */}
+      <div style={{ height: 1, margin: "3px 6px", background: "var(--border-color)" }} />
+
+      {/* Beat Sync toggle */}
+      <button
+        onClick={toggleBeatSync}
+        title="Beat Sync (T) — place notes at current beat"
+        style={{
+          width: 36,
+          height: 34,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 1,
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+          background: beatSyncPlacement ? "#e8a84818" : "transparent",
+          borderLeft: beatSyncPlacement ? "2px solid #e8a848" : "2px solid transparent",
+          color: beatSyncPlacement ? "#e8a848" : "#666",
+          fontSize: 14,
+          transition: "all 0.15s",
+          fontFamily: "inherit",
+          padding: 0,
+        }}
+      >
+        <span>◷</span>
+        <span style={{ fontSize: 7, opacity: 0.6 }}>T</span>
+      </button>
+
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Drawer toggle */}
+      {/* Panel Drawer toggle (☰) */}
       <button
-        onClick={toggleDrawer}
-        title="Line Drawer (L)"
+        onClick={() => {
+          if (canvasActivePanelId) {
+            setCanvasActivePanel(null);
+          } else {
+            setCanvasActivePanel("timeline");
+          }
+        }}
+        title="Panels"
         style={{
           width: 36,
           height: 30,
           border: "none",
           borderRadius: 6,
           cursor: "pointer",
-          background: drawerOpen ? "#6c8aff18" : "transparent",
-          color: drawerOpen ? "var(--accent-primary)" : "#555",
+          background: canvasActivePanelId ? "#6c8aff18" : "transparent",
+          color: canvasActivePanelId ? "var(--accent-primary)" : "#555",
           fontSize: 14,
           display: "flex",
           alignItems: "center",

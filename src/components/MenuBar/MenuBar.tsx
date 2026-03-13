@@ -1,310 +1,31 @@
 import { useState, useRef, useEffect } from "react";
-import JSZip from "jszip";
 import { useChartStore } from "../../stores/chartStore";
-import { useTabStore, type TabType } from "../../stores/tabStore";
-import { useAudioStore } from "../../stores/audioStore";
-import { audioEngine } from "../../audio/audioEngine";
-import { saveProject, exportAsOfficial } from "../../utils/ipc";
-import { convertRpeToPhichain, extractRpeMeta } from "../../utils/rpeImport";
-import { convertPhichainToRpe } from "../../utils/rpeExport";
-import { convertPecToPhichain } from "../../utils/pecImport";
 import type { PanelId } from "../../types/editor";
-
-// ============================================================
-// CONFIGURABLE: Menu structure
-// Add/remove/reorder menu items here.
-// ============================================================
-interface MenuItem {
-  label: string;
-  action?: () => void;
-  shortcut?: string;
-  separator?: boolean;
-  disabled?: boolean;
-}
-
-interface Menu {
-  label: string;
-  items: MenuItem[];
-}
-
-function useMenus(
-  onTogglePanel?: (id: PanelId) => void,
-  onResetLayout?: () => void,
-  onNewChart?: () => void,
-  onOpenSettings?: () => void,
-): Menu[] {
-  const projectPath = useChartStore((s) => s.projectPath);
-  const getChartJson = useChartStore((s) => s.getChartJson);
-  const markClean = useChartStore((s) => s.markClean);
-  const closeProject = useChartStore((s) => s.closeProject);
-  const undo = useChartStore((s) => s.undo);
-  const redo = useChartStore((s) => s.redo);
-  const canUndo = useChartStore((s) => s.canUndo);
-  const canRedo = useChartStore((s) => s.canRedo);
-  const isLoaded = useChartStore((s) => s.isLoaded);
-  const getMeta = useChartStore((s) => s.meta);
-  const openUnifiedEditor = useTabStore((s) => s.openUnifiedEditor);
-
-  return [
-    {
-      label: "File",
-      items: [
-        { label: "New Chart...", shortcut: "Ctrl+N", action: onNewChart },
-        { separator: true, label: "" },
-        {
-          label: "Save Project",
-          shortcut: "Ctrl+S",
-          disabled: !isLoaded,
-          action: async () => {
-            if (!projectPath) return;
-            try {
-              await saveProject(projectPath, getChartJson());
-              markClean();
-            } catch (e) {
-              console.error("Save failed:", e);
-            }
-          },
-        },
-        { label: "Close Project", disabled: !isLoaded, action: closeProject },
-        { separator: true, label: "" },
-        {
-          label: "Import RPE Chart...",
-          action: () => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".json,.zip";
-            input.onchange = async () => {
-              const file = input.files?.[0];
-              if (!file) return;
-              try {
-                let chartText: string;
-                let musicBlob: Blob | null = null;
-                let musicExt: string | null = null;
-                let illustrationBlob: Blob | null = null;
-
-                if (file.name.toLowerCase().endsWith(".zip")) {
-                  // ZIP import: extract chart JSON, music, and illustration
-                  const zipData = await file.arrayBuffer();
-                  const zip = await JSZip.loadAsync(zipData);
-
-                  let chartEntry: JSZip.JSZipObject | null = null;
-                  let audioEntry: JSZip.JSZipObject | null = null;
-                  let imageEntry: JSZip.JSZipObject | null = null;
-
-                  zip.forEach((relativePath, entry) => {
-                    if (entry.dir) return;
-                    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
-                    if (baseName.endsWith(".json") && !chartEntry) {
-                      chartEntry = entry;
-                    } else if (/\.(mp3|ogg|wav|flac|m4a)$/.test(baseName) && !audioEntry) {
-                      audioEntry = entry;
-                      musicExt = baseName.split(".").pop() ?? "mp3";
-                    } else if (/\.(jpg|jpeg|png|webp)$/.test(baseName) && !imageEntry) {
-                      imageEntry = entry;
-                    }
-                  });
-
-                  if (!chartEntry) {
-                    throw new Error("No .json chart file found in the zip archive.");
-                  }
-                  chartText = await chartEntry.async("string");
-
-                  if (audioEntry) {
-                    musicBlob = await (audioEntry as JSZip.JSZipObject).async("blob");
-                  }
-                  if (imageEntry) {
-                    illustrationBlob = await (imageEntry as JSZip.JSZipObject).async("blob");
-                  }
-                } else {
-                  // Plain JSON import
-                  chartText = await file.text();
-                }
-
-                const chart = convertRpeToPhichain(chartText);
-                const meta = extractRpeMeta(chartText);
-                const cs = useChartStore.getState();
-
-                cs.loadFromProjectData({
-                  project_path: null,
-                  music_path: null,
-                  illustration_path: null,
-                  meta,
-                  chart_json: JSON.stringify(chart),
-                });
-
-                // Load music if found in zip
-                if (musicBlob && musicExt) {
-                  const musicUrl = URL.createObjectURL(musicBlob);
-                  await audioEngine.load(musicUrl, musicExt);
-                  useAudioStore.getState().setMusicLoaded(true);
-                }
-
-                // Load illustration if found in zip
-                if (illustrationBlob) {
-                  const illustrationUrl = URL.createObjectURL(illustrationBlob);
-                  await cs.loadIllustration(illustrationUrl);
-                }
-
-                useTabStore.getState().openChart("rpe-import", meta.name || "Imported RPE Chart");
-              } catch (e) {
-                console.error("RPE import failed:", e);
-                alert("Failed to import RPE chart. Check the console for details.");
-              }
-            };
-            input.click();
-          },
-        },
-        {
-          label: "Import PEC Chart...",
-          action: () => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".pec,.txt";
-            input.onchange = async () => {
-              const file = input.files?.[0];
-              if (!file) return;
-              try {
-                const pecText = await file.text();
-                const chart = convertPecToPhichain(pecText);
-                const cs = useChartStore.getState();
-
-                cs.loadFromProjectData({
-                  project_path: null,
-                  music_path: null,
-                  illustration_path: null,
-                  meta: { name: file.name.replace(/\.(pec|txt)$/i, ""), composer: "", charter: "", illustrator: "", level: "" },
-                  chart_json: JSON.stringify(chart),
-                });
-
-                useTabStore.getState().openChart("pec-import", file.name.replace(/\.(pec|txt)$/i, "") || "Imported PEC Chart");
-              } catch (e) {
-                console.error("PEC import failed:", e);
-                alert("Failed to import PEC chart. Check the console for details.");
-              }
-            };
-            input.click();
-          },
-        },
-        { separator: true, label: "" },
-        { label: "Preferences...", action: onOpenSettings },
-        { separator: true, label: "" },
-        { label: "Quit", action: () => console.log("TODO: quit") },
-      ],
-    },
-    {
-      label: "Edit",
-      items: [
-        { label: "Undo", shortcut: "Ctrl+Z", disabled: !canUndo(), action: undo },
-        { label: "Redo", shortcut: "Ctrl+Shift+Z", disabled: !canRedo(), action: redo },
-      ],
-    },
-    {
-      label: "Windows",
-      items: [
-        { label: "Timeline", action: () => onTogglePanel?.("timeline") },
-        { label: "Inspector", action: () => onTogglePanel?.("inspector") },
-        { label: "Line List", action: () => onTogglePanel?.("line-list") },
-        { label: "Toolbar", action: () => onTogglePanel?.("toolbar") },
-        { label: "Timeline Settings", action: () => onTogglePanel?.("timeline-settings") },
-        { label: "BPM List", action: () => onTogglePanel?.("bpm-list") },
-        { label: "Chart Settings", action: () => onTogglePanel?.("chart-settings") },
-        { separator: true, label: "" },
-        { label: "Validation", action: () => onTogglePanel?.("validation") },
-      ],
-    },
-    {
-      label: "View",
-      items: [
-        {
-          label: "Unified Editor",
-          disabled: !isLoaded,
-          action: () => openUnifiedEditor(),
-        },
-        { separator: true, label: "" },
-        {
-          label: "Classic Editor",
-          disabled: !isLoaded,
-          action: () => {
-            const ts = useTabStore.getState();
-            const chartTab = ts.tabs.find((t) => t.type === "chart");
-            if (chartTab) {
-              ts.setActiveTab(chartTab.id);
-            } else {
-              // Create a classic chart tab if none exists
-              const meta = useChartStore.getState().meta;
-              ts.openTab({
-                id: "chart:current",
-                type: "chart",
-                label: meta.name || "Chart",
-                closable: true,
-              });
-            }
-          },
-        },
-      ],
-    },
-    {
-      label: "Export",
-      items: [
-        {
-          label: "Export as Official",
-          disabled: !isLoaded,
-          action: async () => {
-            try {
-              const result = await exportAsOfficial(getChartJson());
-              console.log("Export result:", result);
-            } catch (e) {
-              console.error("Export failed:", e);
-            }
-          },
-        },
-        {
-          label: "Export as RPE JSON",
-          disabled: !isLoaded,
-          action: () => {
-            try {
-              const chart = JSON.parse(getChartJson());
-              const meta = useChartStore.getState().meta;
-              const rpeJson = convertPhichainToRpe(chart, meta);
-              // Download as file
-              const blob = new Blob([rpeJson], { type: "application/json" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = `${meta.name || "chart"}.json`;
-              a.click();
-              URL.revokeObjectURL(url);
-            } catch (e) {
-              console.error("RPE export failed:", e);
-              alert("Failed to export RPE chart. Check the console for details.");
-            }
-          },
-        },
-      ],
-    },
-    {
-      label: "Layout",
-      items: [
-        { label: "Apply Default Layout", action: onResetLayout },
-      ],
-    },
-  ];
-}
+import { useMenus } from "../../hooks/useMenus";
+import type { Menu } from "../../hooks/useMenus";
 
 export function MenuBar({
   onTogglePanel,
   onResetLayout,
   onNewChart,
   onOpenSettings,
+  onOpenCommandPalette,
+  onShowParametric,
 }: {
   onTogglePanel?: (id: PanelId) => void;
   onResetLayout?: () => void;
   onNewChart?: () => void;
   onOpenSettings?: () => void;
+  onOpenCommandPalette?: () => void;
+  onShowParametric?: () => void;
 }) {
-  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onOpenSettings);
+  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric);
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const chartName = useChartStore((s) => s.meta.name);
+  const isDirty = useChartStore((s) => s.isDirty);
+  const isLoaded = useChartStore((s) => s.isLoaded);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -320,62 +41,243 @@ export function MenuBar({
   return (
     <div
       ref={menuRef}
-      className="flex items-center h-7 px-2 gap-1 flex-shrink-0"
+      className="flex items-center flex-shrink-0"
       style={{
-        backgroundColor: "var(--bg-tertiary)",
+        height: 42,
+        padding: "0 12px",
+        backgroundColor: "var(--bg-primary)",
         borderBottom: "1px solid var(--border-color)",
       }}
     >
-      {MENUS.map((menu, menuIndex) => (
-        <div key={menu.label} className="relative">
-          <button
-            className="px-3 py-1 text-xs rounded hover:bg-white/10 transition-colors"
-            style={{ color: "var(--text-primary)" }}
-            onClick={() => setOpenMenu(openMenu === menuIndex ? null : menuIndex)}
-            onMouseEnter={() => {
-              if (openMenu !== null) setOpenMenu(menuIndex);
-            }}
-          >
-            {menu.label}
-          </button>
-
-          {openMenu === menuIndex && (
-            <div
-              className="absolute top-full left-0 mt-0.5 py-1 min-w-48 rounded shadow-xl z-50"
+      {/* ── Left: Breadcrumb ── */}
+      <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+        <span style={{ color: "var(--accent-primary)", fontSize: 16, fontWeight: 600, lineHeight: 1 }}>
+          ⬡
+        </span>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>PhiChain</span>
+        {isLoaded && (
+          <>
+            <span style={{ color: "var(--text-muted)", fontSize: 11 }}>›</span>
+            <span
+              className="truncate"
+              style={{ fontSize: 12, color: "var(--text-primary)", maxWidth: 180 }}
+            >
+              {chartName || "Untitled"}
+            </span>
+            <span
               style={{
-                backgroundColor: "var(--bg-tertiary)",
-                border: "1px solid var(--border-color)",
+                fontSize: 9,
+                padding: "1px 6px",
+                borderRadius: 8,
+                backgroundColor: isDirty ? "rgba(255, 180, 60, 0.15)" : "var(--bg-active)",
+                color: isDirty ? "#ffb43c" : "var(--text-muted)",
+                whiteSpace: "nowrap",
               }}
             >
-              {menu.items.map((item, i) =>
-                item.separator ? (
-                  <div
-                    key={i}
-                    className="my-1 mx-2"
-                    style={{ borderTop: "1px solid var(--border-color)" }}
-                  />
-                ) : (
-                  <button
-                    key={item.label}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-white/10 transition-colors disabled:opacity-40"
-                    style={{ color: "var(--text-primary)" }}
-                    disabled={item.disabled}
-                    onClick={() => {
-                      item.action?.();
-                      setOpenMenu(null);
+              {isDirty ? "unsaved" : "saved"}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* ── Center: Menus ── */}
+      <div className="flex-1 flex items-center justify-center gap-0.5">
+        {MENUS.map((menu, menuIndex) => (
+          <MenuDropdown
+            key={menu.label}
+            menu={menu}
+            isOpen={openMenu === menuIndex}
+            onToggle={() => setOpenMenu(openMenu === menuIndex ? null : menuIndex)}
+            onHoverEnter={() => {
+              if (openMenu !== null) setOpenMenu(menuIndex);
+            }}
+            onClose={() => setOpenMenu(null)}
+          />
+        ))}
+      </div>
+
+      {/* ── Right: Command Palette + Settings ── */}
+      <div className="flex items-center gap-1.5">
+        <button
+          className="flex items-center gap-1.5 transition-colors"
+          style={{
+            padding: "5px 14px",
+            backgroundColor: "var(--bg-active)",
+            borderRadius: 8,
+            border: "0.5px solid var(--border-color)",
+            cursor: "pointer",
+            color: "var(--text-muted)",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.borderColor = "var(--text-muted)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.borderColor = "var(--border-color)";
+          }}
+          onClick={() => { setOpenMenu(null); onOpenCommandPalette?.(); }}
+        >
+          <span style={{ fontSize: 12 }}>⌘</span>
+          <span style={{ fontSize: 11 }}>Command palette</span>
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', monospace",
+              backgroundColor: "var(--bg-secondary)",
+              padding: "1px 5px",
+              borderRadius: 3,
+            }}
+          >
+            Ctrl+K
+          </span>
+        </button>
+        <button
+          className="flex items-center justify-center transition-colors"
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 6,
+            color: "var(--text-secondary)",
+            fontSize: 15,
+            cursor: "pointer",
+            backgroundColor: "transparent",
+            border: "none",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.backgroundColor = "var(--bg-active)";
+            (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+            (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+          }}
+          onClick={() => { setOpenMenu(null); onOpenSettings?.(); }}
+          title="Settings"
+        >
+          ⚙
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Menu Dropdown Sub-component ── */
+function MenuDropdown({
+  menu,
+  isOpen,
+  onToggle,
+  onHoverEnter,
+  onClose,
+}: {
+  menu: Menu;
+  isOpen: boolean;
+  onToggle: () => void;
+  onHoverEnter: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="relative">
+      <button
+        className="transition-colors"
+        style={{
+          padding: "4px 10px",
+          borderRadius: 5,
+          fontSize: 11,
+          color: isOpen ? "var(--text-primary)" : "var(--text-secondary)",
+          backgroundColor: isOpen ? "var(--bg-active)" : "transparent",
+          cursor: "pointer",
+          border: "none",
+          whiteSpace: "nowrap",
+        }}
+        onMouseEnter={(e) => {
+          onHoverEnter();
+          if (!isOpen) {
+            (e.currentTarget as HTMLElement).style.backgroundColor = "var(--bg-active)";
+            (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isOpen) {
+            (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+            (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+          }
+        }}
+        onClick={onToggle}
+      >
+        {menu.label}
+      </button>
+
+      {isOpen && (
+        <div
+          className="absolute top-full left-0 z-50"
+          style={{
+            marginTop: 2,
+            padding: 4,
+            minWidth: 220,
+            backgroundColor: "var(--bg-tertiary)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 10,
+            boxShadow: "0 8px 30px rgba(0,0,0,0.4)",
+          }}
+        >
+          {menu.items.map((item, i) =>
+            item.separator ? (
+              <div
+                key={i}
+                style={{
+                  height: 1,
+                  margin: "4px 8px",
+                  backgroundColor: "var(--border-color)",
+                  opacity: 0.5,
+                }}
+              />
+            ) : (
+              <button
+                key={item.label}
+                className="w-full flex items-center justify-between transition-colors"
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  color: item.disabled ? "var(--text-muted)" : "var(--text-primary)",
+                  cursor: item.disabled ? "default" : "pointer",
+                  opacity: item.disabled ? 0.4 : 1,
+                  backgroundColor: "transparent",
+                  border: "none",
+                  textAlign: "left",
+                }}
+                disabled={item.disabled}
+                onMouseEnter={(e) => {
+                  if (!item.disabled) {
+                    (e.currentTarget as HTMLElement).style.backgroundColor = "var(--bg-active)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                }}
+                onClick={() => {
+                  item.action?.();
+                  onClose();
+                }}
+              >
+                <span>{item.label}</span>
+                {item.shortcut && (
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      paddingLeft: 16,
+                      opacity: 0.4,
+                      fontSize: 11,
+                      fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', monospace",
                     }}
                   >
-                    <span>{item.label}</span>
-                    {item.shortcut && (
-                      <span style={{ color: "var(--text-muted)" }}>{item.shortcut}</span>
-                    )}
-                  </button>
-                )
-              )}
-            </div>
+                    {item.shortcut}
+                  </span>
+                )}
+              </button>
+            ),
           )}
         </div>
-      ))}
+      )}
     </div>
   );
 }

@@ -16,12 +16,14 @@ import { useAudioStore } from "../../stores/audioStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useRespackStore } from "../../stores/respackStore";
+import { useGroupStore } from "../../stores/groupStore";
 import { GameRenderer, type RenderResult, type RenderedLineInfo } from "../../canvas/gameRenderer";
 import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { HitEffectManager } from "../../canvas/hitEffects";
 import { BpmList } from "../../utils/bpmList";
-import { CANVAS_WIDTH, CANVAS_HEIGHT, beatToFloat, floatToBeat } from "../../types/chart";
+import { beatToFloat, floatToBeat, CANVAS_WIDTH } from "../../types/chart";
 import type { NoteKind, Note, Beat } from "../../types/chart";
+import { snapBeat } from "../../utils/beat";
 
 // Interaction modules
 import {
@@ -37,7 +39,6 @@ import {
   type DragState,
   type TranslateDragState,
   type RotateDragState,
-  type NoteDragState,
   type HoldPlacementDragState,
   type HoldResizeDragState,
   startTranslateDrag,
@@ -53,7 +54,6 @@ import {
   startNoteDrag,
   updateNoteDrag,
   finishNoteDrag,
-  computeRotationAngle,
   getCursorForPosition,
 } from "./CanvasInteraction";
 import {
@@ -86,6 +86,8 @@ export function UnifiedCanvas() {
   const wasPlayingRef = useRef(false);
   const lastRenderResultRef = useRef<RenderResult | null>(null);
   const dragRef = useRef<DragState>(null);
+  const hiddenSetRef = useRef<Set<number>>(new Set());
+  const hiddenVisRef = useRef<Record<number, boolean>>({});
   const spaceDownRef = useRef(false);
 
   const isLoaded = useChartStore((s) => s.isLoaded);
@@ -208,6 +210,7 @@ export function UnifiedCanvas() {
           scale: activeRespack.config.hitFxScale ?? 1.0,
           rotate: activeRespack.config.hitFxRotate ?? false,
           hideParticles: activeRespack.config.hideParticles ?? false,
+          tinted: activeRespack.config.hitFxTinted ?? true,
         });
       } else {
         hitEffectRef.current.setConfig(null);
@@ -220,11 +223,15 @@ export function UnifiedCanvas() {
       }
       const bpmList = bpmListRef.current!;
 
-      // Compute hidden lines from visibility toggles
+      // Compute hidden lines from visibility toggles (cached, only rebuild when ref changes)
       const vis = es.lineVisibility;
-      const hiddenLineIndices = new Set(
-        Object.entries(vis).filter(([, v]) => v === false).map(([k]) => Number(k))
-      );
+      if (vis !== hiddenVisRef.current) {
+        hiddenVisRef.current = vis;
+        hiddenSetRef.current = new Set(
+          Object.entries(vis).filter(([, v]) => v === false).map(([k]) => Number(k))
+        );
+      }
+      const hiddenLineIndices = hiddenSetRef.current;
 
       // ---- Apply viewport transform ----
       const ctx = canvas.getContext("2d");
@@ -268,11 +275,26 @@ export function UnifiedCanvas() {
           chartLevel: cs.meta.level,
           hitEffectManager: hitEffectRef.current,
           isPlaying,
-          showHitEffects: true,
+          showHitEffects: ss.showHitEffects,
           pendingNote: es.pendingNote,
           pendingLineIndex: es.selectedLineIndex,
           respack: activeRespack,
           hiddenLineIndices: hiddenLineIndices.size > 0 ? hiddenLineIndices : null,
+          multiSelectedLineIndices: es.multiSelectedLineIndices.length > 0 ? new Set(es.multiSelectedLineIndices) : null,
+          chartFontFamily: cs.chartFontFamily,
+          // Group editing mode
+          ...(() => {
+            const gs = useGroupStore.getState();
+            const activeGroup = gs.getActiveGroup();
+            if (!activeGroup || activeGroup.type !== "line") return {};
+            const memberIndices = new Set(activeGroup.lines.map((l: { lineIndex: number }) => l.lineIndex));
+            return {
+              groupMemberLineIndices: memberIndices,
+              groupDimFactor: gs.groupEditMode.hideOthers ? 0 : 0.15,
+              groupHideOthers: gs.groupEditMode.hideOthers,
+              groupSimplifiedCanvas: gs.groupEditMode.simplifiedCanvas,
+            };
+          })(),
         },
       );
 
@@ -454,16 +476,33 @@ export function UnifiedCanvas() {
       if (line && noteKind) {
         const bpmList = bpmListRef.current;
         if (bpmList) {
-          const placement = projectClickToNote(
-            mouseX, mouseY,
-            selectedLineInfo.screenX, selectedLineInfo.screenY,
-            selectedLineInfo.rotation,
-            line,
-            getCurrentTime(),
-            bpmList,
-            rect.width, rect.height,
-            es.density,
-          );
+          let placement: { beat: Beat; x: number; above: boolean } | null = null;
+
+          if (es.beatSyncPlacement) {
+            // Beat-sync mode: beat from playhead, X and above from click
+            const local = screenToLineLocal(
+              mouseX, mouseY,
+              selectedLineInfo.screenX, selectedLineInfo.screenY,
+              selectedLineInfo.rotation, rect.width,
+            );
+            const currentBeatFloat = getCurrentBeat();
+            const beat = snapBeat(currentBeatFloat, es.density);
+            const x = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, Math.round(local.noteX)));
+            placement = { beat, x, above: local.above };
+          } else {
+            // Normal mode: beat from perpendicular distance
+            placement = projectClickToNote(
+              mouseX, mouseY,
+              selectedLineInfo.screenX, selectedLineInfo.screenY,
+              selectedLineInfo.rotation,
+              line,
+              getCurrentTime(),
+              bpmList,
+              rect.width, rect.height,
+              es.density,
+            );
+          }
+
           if (placement) {
             const newNote: Note = {
               kind: noteKind,
@@ -477,8 +516,8 @@ export function UnifiedCanvas() {
             }
             cs.addNote(selectedLineInfo.lineIndex, newNote);
 
-            // For hold notes, start a placement drag to set the hold length
-            if (noteKind === "hold") {
+            // For hold notes in normal mode, start a placement drag to set the hold length
+            if (noteKind === "hold" && !es.beatSyncPlacement) {
               const addedNoteIndex = cs.chart.lines[selectedLineInfo.lineIndex].notes.length - 1;
               dragRef.current = {
                 type: "hold_placement",
@@ -616,7 +655,11 @@ export function UnifiedCanvas() {
       );
 
       if (hitIndex !== null) {
-        es.selectLine(hitIndex);
+        if (e.ctrlKey || e.metaKey) {
+          es.toggleMultiSelectedLine(hitIndex);
+        } else {
+          es.selectLine(hitIndex);
+        }
         return;
       }
     }
@@ -747,24 +790,40 @@ export function UnifiedCanvas() {
         const bpmList = bpmListRef.current;
 
         if (line && bpmList && noteKind) {
-          const ghost = computeGhostNote(
-            mouseX, mouseY,
-            selectedLineInfo.screenX, selectedLineInfo.screenY,
-            selectedLineInfo.rotation,
-            line,
-            getCurrentTime(),
-            bpmList,
-            rect.width, rect.height,
-            es.density,
-            noteKind,
-          );
+          let ghostResult: { beat: Beat; x: number; kind: string; above: boolean } | null = null;
 
-          if (ghost) {
+          if (es.beatSyncPlacement) {
+            // Beat-sync mode: ghost at current playhead beat
+            const local = screenToLineLocal(
+              mouseX, mouseY,
+              selectedLineInfo.screenX, selectedLineInfo.screenY,
+              selectedLineInfo.rotation, rect.width,
+            );
+            const currentBeatFloat = getCurrentBeat();
+            const beat = snapBeat(currentBeatFloat, es.density);
+            const x = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, Math.round(local.noteX)));
+            ghostResult = { beat, x, kind: noteKind, above: local.above };
+          } else {
+            // Normal mode: ghost from perpendicular distance
+            ghostResult = computeGhostNote(
+              mouseX, mouseY,
+              selectedLineInfo.screenX, selectedLineInfo.screenY,
+              selectedLineInfo.rotation,
+              line,
+              getCurrentTime(),
+              bpmList,
+              rect.width, rect.height,
+              es.density,
+              noteKind,
+            );
+          }
+
+          if (ghostResult) {
             es.setPendingNote({
-              beat: ghost.beat,
-              x: ghost.x,
-              kind: ghost.kind as NoteKind,
-              above: ghost.above,
+              beat: ghostResult.beat,
+              x: ghostResult.x,
+              kind: ghostResult.kind as NoteKind,
+              above: ghostResult.above,
             });
           } else {
             es.setPendingNote(null);

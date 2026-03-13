@@ -2,11 +2,11 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Mosaic,
   MosaicWindow,
-  MosaicNode,
   getLeaves,
   createBalancedTreeFromLeaves,
   RemoveButton,
 } from "react-mosaic-component";
+import type { MosaicNode } from "react-mosaic-component";
 import "react-mosaic-component/react-mosaic-component.css";
 
 import type { PanelId } from "./types/editor";
@@ -36,12 +36,19 @@ import { BpmListPanel } from "./components/BpmList/BpmList";
 import { ChartSettings } from "./components/ChartSettings/ChartSettings";
 import { NewProjectDialog } from "./components/NewProjectDialog/NewProjectDialog";
 import { HomeScreen } from "./components/Home/HomeScreen";
-import { SettingsPage } from "./components/Settings/SettingsPage";
+import { SettingsModal } from "./components/SettingsModal/SettingsModal";
+import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { LineEventEditor } from "./components/LineEventEditor/LineEventEditor";
 import { UnifiedEditorTab } from "./components/UnifiedCanvas/UnifiedEditorTab";
 import { ValidationPanel } from "./components/Validation/ValidationPanel";
+import { EffectsEditor } from "./components/EffectsEditor/EffectsEditor";
+import { ParametricDialog } from "./components/ParametricDialog/ParametricDialog";
+import { useEditorStore } from "./stores/editorStore";
 import { useGlobalHotkeys } from "./hooks/useHotkeys";
 import { useClipboard } from "./hooks/useClipboard";
+import { triggerImportChart } from "./utils/importChart";
+import { ToastContainer } from "./components/common/Toast";
+import { ConfirmDialog } from "./components/common/ConfirmDialog";
 
 // ============================================================
 // CONFIGURABLE: Default panel layout
@@ -87,6 +94,9 @@ const PANEL_TITLES: Record<PanelId, string> = {
   "chart-settings": "Chart Settings",
   "hotkey-reference": "Hotkey Reference",
   "validation": "Validation",
+  "effects": "Effects",
+  "textures": "Textures",
+  "group-manager": "Group Manager",
 };
 
 function renderPanel(id: PanelId) {
@@ -109,6 +119,8 @@ function renderPanel(id: PanelId) {
       return <ChartSettings />;
     case "validation":
       return <ValidationPanel />;
+    case "effects":
+      return <EffectsEditor />;
     default:
       return <PanelPlaceholder name={PANEL_TITLES[id]} description="Coming soon" color="var(--text-muted)" />;
   }
@@ -135,6 +147,8 @@ function renderPanelTab(panelId: string) {
       return <ChartSettings />;
     case "validation":
       return <ValidationPanel />;
+    case "effects":
+      return <EffectsEditor />;
     default:
       return (
         <PanelPlaceholder
@@ -150,29 +164,28 @@ function renderPanelTab(panelId: string) {
  * Find the chart tab ID associated with a given tab.
  * Panel tabs and line-event-editor tabs belong to the currently active chart.
  */
-function getChartTabId(tab: { id: string; type: string }): string | null {
-  if (tab.type === "chart") return tab.id;
-  // Panel and line_event_editor tabs are tied to the current chart context
-  // They share the same chart session as the chart tab
-  return null;
-}
-
 export default function App() {
   const [layout, setLayout] = useState<MosaicNode<PanelId> | null>(DEFAULT_LAYOUT);
   const [showNewProject, setShowNewProject] = useState(false);
+  const [showParametric, setShowParametric] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [expandedPanelId, setExpandedPanelId] = useState<PanelId | null>(null);
   const savedLayoutRef = useRef<MosaicNode<PanelId> | null>(null);
   const prevTabIdRef = useRef<string | null>(null);
 
   const activeTabId = useTabStore((s) => s.activeTabId);
   const tabs = useTabStore((s) => s.tabs);
-  const openSettings = useTabStore((s) => s.openSettings);
   const openPanel = useTabStore((s) => s.openPanel);
   const isLoaded = useChartStore((s) => s.isLoaded);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
 
-  useGlobalHotkeys({ onNewChart: () => setShowNewProject(true) });
+  useGlobalHotkeys({
+    onNewChart: () => setShowNewProject(true),
+    onCommandPalette: () => setShowCommandPalette((prev) => !prev),
+    onImportChart: triggerImportChart,
+  });
   useClipboard();
 
   // ---- Multi-chart session management ----
@@ -228,7 +241,6 @@ export default function App() {
 
   // Clean up sessions when individual tabs are closed
   useEffect(() => {
-    const tabIds = new Set(tabs.map((t) => t.id));
     // We can't easily iterate the session map here, but we can
     // clean up when tabs disappear. The deleteSession calls are
     // handled via the closeProject flow above and closeTab handler below.
@@ -270,6 +282,13 @@ export default function App() {
   /** Add a panel to the layout if it isn't already visible */
   const togglePanel = useCallback(
     (panelId: PanelId) => {
+      // In unified editor mode, route to the canvas panel drawer
+      if (activeTab?.type === "unified_editor") {
+        const { toggleCanvasPanel } = useEditorStore.getState();
+        toggleCanvasPanel(panelId);
+        return;
+      }
+
       if (!layout) {
         setLayout(panelId);
         return;
@@ -278,7 +297,7 @@ export default function App() {
       if (leaves.includes(panelId)) return;
       setLayout(createBalancedTreeFromLeaves([...leaves, panelId]));
     },
-    [layout],
+    [layout, activeTab],
   );
 
   /** Reset layout to defaults */
@@ -301,7 +320,9 @@ export default function App() {
         onTogglePanel={togglePanel}
         onResetLayout={resetLayout}
         onNewChart={() => setShowNewProject(true)}
-        onOpenSettings={openSettings}
+        onOpenSettings={() => setShowSettings(true)}
+        onOpenCommandPalette={() => setShowCommandPalette(true)}
+        onShowParametric={() => setShowParametric(true)}
       />
       <TabBar />
 
@@ -309,7 +330,7 @@ export default function App() {
 
       <div className="flex-1 overflow-hidden relative">
         {activeTab.type === "home" && (
-          <HomeScreen onNewChart={() => setShowNewProject(true)} />
+          <HomeScreen onNewChart={() => setShowNewProject(true)} onImportChart={triggerImportChart} />
         )}
         {activeTab.type === "chart" && (
           <Mosaic<PanelId>
@@ -352,7 +373,6 @@ export default function App() {
             className="mosaic-dark-theme"
           />
         )}
-        {activeTab.type === "settings" && <SettingsPage />}
         {activeTab.type === "line_event_editor" && activeTab.data && (
           <LineEventEditor lineIndex={activeTab.data.lineIndex as number} />
         )}
@@ -368,6 +388,11 @@ export default function App() {
 
       {(activeTab.type === "chart" || activeTab.type === "panel" || activeTab.type === "unified_editor") && <StatusBar />}
       <NewProjectDialog open={showNewProject} onClose={() => setShowNewProject(false)} />
+      <ParametricDialog open={showParametric} onClose={() => setShowParametric(false)} />
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      <CommandPalette open={showCommandPalette} onClose={() => setShowCommandPalette(false)} />
+      <ToastContainer />
+      <ConfirmDialog />
     </div>
   );
 }

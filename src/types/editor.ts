@@ -32,7 +32,10 @@ export type PanelId =
   | "bpm-list"
   | "chart-settings"
   | "hotkey-reference"
-  | "validation";
+  | "validation"
+  | "effects"
+  | "textures"
+  | "group-manager";
 
 /** Keyboard shortcut definition */
 export interface HotkeyBinding {

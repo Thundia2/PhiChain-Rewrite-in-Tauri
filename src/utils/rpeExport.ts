@@ -7,8 +7,6 @@
 
 import type {
   PhichainChart,
-  Line,
-  Note,
   LineEvent,
   Beat,
   EasingType,
@@ -101,6 +99,9 @@ function convertLineEventToRpe(event: LineEvent, negate = false): RpeEvent {
   if (event.easing_right != null && event.easing_right !== 1) {
     rpeEvent.easingRight = event.easing_right;
   }
+  if (event.linkgroup != null) {
+    (rpeEvent as unknown as Record<string, unknown>).linkgroup = event.linkgroup;
+  }
 
   return rpeEvent;
 }
@@ -151,6 +152,7 @@ function buildExtendedEvents(events: LineEvent[]): Record<string, unknown> | und
   const scaleXEvents = events.filter((e) => e.kind === "scale_x").map((e) => convertLineEventToRpe(e));
   const scaleYEvents = events.filter((e) => e.kind === "scale_y").map((e) => convertLineEventToRpe(e));
   const inclineEvents = events.filter((e) => e.kind === "incline").map((e) => convertLineEventToRpe(e));
+  const gifEvents = events.filter((e) => e.kind === "gif").map((e) => convertLineEventToRpe(e));
 
   const colorEvents = events.filter((e) => e.kind === "color").map((event) => {
     let startColor: [number, number, number] = [255, 255, 255];
@@ -179,18 +181,25 @@ function buildExtendedEvents(events: LineEvent[]): Record<string, unknown> | und
     }
     if (event.easing_left != null && event.easing_left !== 0) rpeEvent.easingLeft = event.easing_left;
     if (event.easing_right != null && event.easing_right !== 1) rpeEvent.easingRight = event.easing_right;
+    if (event.linkgroup != null) rpeEvent.linkgroup = event.linkgroup;
     return rpeEvent;
   });
 
-  const textEvents = events.filter((e) => e.kind === "text").map((event) => ({
-    startTime: event.start_beat,
-    endTime: event.end_beat,
-    start: "text_value" in event.value ? event.value.text_value : "",
-    end: "text_value" in event.value ? event.value.text_value : "",
-  }));
+  const textEvents = events.filter((e) => e.kind === "text").map((event) => {
+    const te: Record<string, unknown> = {
+      startTime: event.start_beat,
+      endTime: event.end_beat,
+      start: "text_value" in event.value ? event.value.text_value : "",
+      end: "text_value" in event.value ? event.value.text_value : "",
+    };
+    if (event.linkgroup != null) te.linkgroup = event.linkgroup;
+    if (event.font) te.font = event.font;
+    return te;
+  });
 
   const hasExtended = scaleXEvents.length > 0 || scaleYEvents.length > 0 ||
-    colorEvents.length > 0 || textEvents.length > 0 || inclineEvents.length > 0;
+    colorEvents.length > 0 || textEvents.length > 0 || inclineEvents.length > 0 ||
+    gifEvents.length > 0;
 
   if (!hasExtended) return undefined;
 
@@ -200,6 +209,7 @@ function buildExtendedEvents(events: LineEvent[]): Record<string, unknown> | und
   if (colorEvents.length > 0) extended.colorEvents = colorEvents;
   if (textEvents.length > 0) extended.textEvents = textEvents;
   if (inclineEvents.length > 0) extended.inclineEvents = inclineEvents;
+  if (gifEvents.length > 0) extended.gifEvents = gifEvents;
   return extended;
 }
 
@@ -244,6 +254,10 @@ export function convertPhichainToRpe(
       if (note.size != null && note.size !== 1) rpeNote.size = note.size;
       if (note.alpha != null && note.alpha !== 255) rpeNote.alpha = note.alpha;
       if (note.visible_time != null && note.visible_time !== 999999) rpeNote.visibleTime = note.visible_time;
+      if (note.hitsound) rpeNote.hitsound = note.hitsound;
+      if (note.judge_area != null && note.judge_area !== 1) rpeNote.judgeArea = note.judge_area;
+      if (note.tint) rpeNote.tint = note.tint;
+      if (note.tint_hit_effects) rpeNote.tintHitEffects = note.tint_hit_effects;
 
       return rpeNote;
     });
@@ -272,6 +286,8 @@ export function convertPhichainToRpe(
     if (line.texture) rpeLine.Texture = line.texture;
     if (line.anchor) rpeLine.anchor = line.anchor;
     if (line.rotate_with_father === false) rpeLine.rotateWithFather = false;
+    if (line.attach_ui) rpeLine.attachUI = line.attach_ui;
+    if (line.is_gif) rpeLine.isGif = true;
 
     // Extended events
     const extended = buildExtendedEvents(line.events);
@@ -301,9 +317,11 @@ export function convertPhichainToRpe(
       level: meta.level,
       illustrator: meta.illustrator,
       offset: Math.round(chart.offset * 1000), // seconds → ms
-      song: "music.mp3",
-      background: "bg.png",
-      id: "1",
+      song: meta.rpe_song ?? "music.mp3",
+      background: meta.rpe_background ?? "bg.png",
+      id: meta.rpe_id ?? "1",
+      ...(meta.rpe_duration != null && { duration: meta.rpe_duration }),
+      ...(meta.rpe_illustration != null && { illustration: meta.rpe_illustration }),
     },
     BPMList: chart.bpm_list.map((b) => ({
       startTime: b.beat,

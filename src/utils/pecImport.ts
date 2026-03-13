@@ -19,7 +19,7 @@
 // basic note properties. No layers, no extended events, no RPE features.
 // ============================================================
 
-import type { PhichainChart, Line, Note, LineEvent, BpmPoint, Beat, NoteKind, EasingType } from "../types/chart";
+import type { PhichainChart, Line, Note, LineEvent, BpmPoint, NoteKind, EasingType } from "../types/chart";
 import { floatToBeat } from "../types/chart";
 
 // PEC easing type mapping (PEC uses numeric IDs)
