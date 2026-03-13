@@ -54,10 +54,19 @@ export interface RespackTextures {
   hitFx: HTMLImageElement | null;
 }
 
+export interface RespackSounds {
+  tap: Blob | null;
+  drag: Blob | null;
+  flick: Blob | null;
+  /** Results screen background music */
+  ending: Blob | null;
+}
+
 export interface LoadedRespack {
   id: string;
   config: RespackConfig;
   textures: RespackTextures;
+  sounds: RespackSounds;
 }
 
 // ============================================================
@@ -202,9 +211,26 @@ const TEXTURE_MAP: Record<string, keyof RespackTextures> = {
   "hit_fx.png": "hitFx",
 };
 
+// Map from zip filenames to sound keys
+const SOUND_MAP: Record<string, keyof RespackSounds> = {
+  "click.ogg": "tap",
+  "drag.ogg": "drag",
+  "flick.ogg": "flick",
+  "click.mp3": "tap",
+  "drag.mp3": "drag",
+  "flick.mp3": "flick",
+  "click.wav": "tap",
+  "drag.wav": "drag",
+  "flick.wav": "flick",
+  "ending.ogg": "ending",
+  "ending.mp3": "ending",
+  "ending.wav": "ending",
+};
+
 export async function extractRespack(zipData: ArrayBuffer): Promise<{
   config: RespackConfig;
   textures: RespackTextures;
+  sounds: RespackSounds;
 }> {
   const zip = await JSZip.loadAsync(zipData);
 
@@ -256,5 +282,14 @@ export async function extractRespack(zipData: ArrayBuffer): Promise<{
     textures.holdMH = await splitHoldAtlas(holdMhImg, atlasMH[0], atlasMH[1]);
   }
 
-  return { config, textures };
+  // Extract hit sounds
+  const sounds: RespackSounds = { tap: null, drag: null, flick: null, ending: null };
+  for (const [filename, key] of Object.entries(SOUND_MAP)) {
+    const file = zip.file(filename);
+    if (file && !sounds[key]) {
+      sounds[key] = await file.async("blob");
+    }
+  }
+
+  return { config, textures, sounds };
 }

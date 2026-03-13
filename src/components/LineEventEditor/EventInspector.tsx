@@ -19,6 +19,12 @@ const EVENT_COLORS: Record<LineEventKind, string> = {
   rotation: "#ffd43b",
   opacity: "#cc5de8",
   speed: "#4dabf7",
+  scale_x: "#ff922b",
+  scale_y: "#20c997",
+  color: "#e599f7",
+  text: "#a9e34b",
+  incline: "#74c0fc",
+  gif: "#f06595",
 };
 
 const KIND_LABELS: Record<LineEventKind, string> = {
@@ -27,6 +33,12 @@ const KIND_LABELS: Record<LineEventKind, string> = {
   rotation: "Rotation",
   opacity: "Opacity",
   speed: "Speed",
+  scale_x: "Scale X",
+  scale_y: "Scale Y",
+  color: "Color",
+  text: "Text",
+  incline: "Incline",
+  gif: "GIF Progress",
 };
 
 interface EventInspectorProps {
@@ -53,7 +65,6 @@ function findActiveEvent(
 
 export function EventInspector({ lineIndex }: EventInspectorProps) {
   const chart = useChartStore((s) => s.chart);
-  const editEvent = useChartStore((s) => s.editEvent);
   const addEvent = useChartStore((s) => s.addEvent);
   const currentBeat = useEditorStore((s) => s.eventEditorCurrentBeat);
   const activeProperty = useEditorStore((s) => s.eventEditorActiveProperty);
@@ -197,8 +208,10 @@ function ActiveEventEditor({
 }) {
   const editEvent = useChartStore((s) => s.editEvent);
   const isTransition = "transition" in event.value;
-  const startVal = isTransition ? event.value.transition.start : event.value.constant;
-  const endVal = isTransition ? event.value.transition.end : event.value.constant;
+  const tv = isTransition ? (event.value as { transition: { start: number; end: number; easing: EasingType } }).transition : null;
+  const cv = !isTransition ? (event.value as { constant: number }).constant : null;
+  const startVal = tv ? tv.start : cv!;
+  const endVal = tv ? tv.end : cv!;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -229,7 +242,7 @@ function ActiveEventEditor({
           }
         }}
       />
-      {isTransition ? (
+      {isTransition && tv ? (
         <>
           <Field
             label="Start val"
@@ -239,8 +252,8 @@ function ActiveEventEditor({
                 value: {
                   transition: {
                     start: parseFloat(v) || 0,
-                    end: event.value.transition.end,
-                    easing: event.value.transition.easing,
+                    end: tv.end,
+                    easing: tv.easing,
                   },
                 },
               })
@@ -254,9 +267,9 @@ function ActiveEventEditor({
               editEvent(lineIndex, eventIndex, {
                 value: {
                   transition: {
-                    start: event.value.transition.start,
+                    start: tv.start,
                     end: parseFloat(v) || 0,
-                    easing: event.value.transition.easing,
+                    easing: tv.easing,
                   },
                 },
               })
@@ -265,14 +278,14 @@ function ActiveEventEditor({
           />
           <SelectField
             label="Easing"
-            value={typeof event.value.transition.easing === "string" ? event.value.transition.easing : "linear"}
+            value={typeof tv.easing === "string" ? tv.easing : "linear"}
             options={EASING_OPTIONS}
             onChange={(v) =>
               editEvent(lineIndex, eventIndex, {
                 value: {
                   transition: {
-                    start: event.value.transition.start,
-                    end: event.value.transition.end,
+                    start: tv.start,
+                    end: tv.end,
                     easing: v as EasingType,
                   },
                 },

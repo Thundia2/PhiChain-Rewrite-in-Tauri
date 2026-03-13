@@ -25,6 +25,9 @@ import type {
   LineEventKind,
 } from "../types/chart";
 import { beatToFloat } from "../types/chart";
+import type { ExtraConfig } from "../types/extra";
+import { DEFAULT_EXTRA_CONFIG } from "../types/extra";
+import { ensureNoteUids, generateNoteUid } from "../utils/noteUid";
 
 // ============================================================
 // CONFIGURABLE: Maximum undo history depth
@@ -48,11 +51,11 @@ const DEFAULT_META: ProjectMeta = {
 };
 
 // ---- Helper: create a default line with initial events ----
-function createDefaultLine(name?: string): Line {
+function createDefaultLine(name?: string, index?: number): Line {
   const defaultBeat: [number, number, number] = [0, 0, 1];
   const farBeat: [number, number, number] = [1000, 0, 1];
   return {
-    name: name ?? `Line ${Date.now()}`,
+    name: name ?? `Line ${(index ?? 0) + 1}`,
     notes: [],
     events: [
       { kind: "x" as const, start_beat: defaultBeat, end_beat: farBeat, value: { constant: 0 } },
@@ -156,6 +159,15 @@ export interface ChartState {
   batchEditNotes: (lineIndex: number, edits: Array<{ noteIndex: number; changes: Partial<Note> }>) => void;
   batchEditEvents: (lineIndex: number, edits: Array<{ eventIndex: number; changes: Partial<LineEvent> }>) => void;
 
+  /** Atomically apply mutations across multiple lines as a single undo entry (used by group batch operations) */
+  batchMultiLineMutations: (mutations: Array<{
+    lineIndex: number;
+    noteEdits?: Array<{ noteIndex: number; changes: Partial<Note> }>;
+    eventEdits?: Array<{ eventIndex: number; changes: Partial<LineEvent> }>;
+    newEvents?: LineEvent[];
+    removeEventIndices?: number[];
+  }>) => void;
+
   // ---- Event mutations ----
   addEvent: (lineIndex: number, event: LineEvent) => void;
   removeEvents: (lineIndex: number, eventIndices: number[]) => void;
@@ -178,6 +190,20 @@ export interface ChartState {
   illustrationImage: HTMLImageElement | null;
   loadIllustration: (src: string) => Promise<void>;
   clearIllustration: () => void;
+
+  // ---- Line textures (custom images for texture lines) ----
+  lineTextures: Map<string, Blob>;
+  setLineTexture: (name: string, blob: Blob) => void;
+  removeLineTexture: (name: string) => void;
+  clearLineTextures: () => void;
+
+  // ---- Extra config (prpr/Phira extra.json) ----
+  extraConfig: ExtraConfig;
+  setExtraConfig: (config: ExtraConfig) => void;
+
+  // ---- Chart font (custom font from chart ZIP for text events) ----
+  chartFontFamily: string | null;
+  setChartFontFamily: (family: string | null) => void;
 
   // ---- Undo/redo ----
   undo: () => void;
@@ -207,21 +233,29 @@ export const useChartStore = create<ChartState>()((set, get) => ({
   _past: [],
   _future: [],
   illustrationImage: null,
+  lineTextures: new Map<string, Blob>(),
+  extraConfig: { ...DEFAULT_EXTRA_CONFIG },
+  chartFontFamily: null,
 
   // ---- Project lifecycle ----
 
-  loadFromProjectData: (data) =>
+  loadFromProjectData: (data) => {
+    const chart = JSON.parse(data.chart_json) as PhichainChart;
+    ensureNoteUids(chart);
     set({
       projectPath: data.project_path,
       musicPath: data.music_path,
       illustrationPath: data.illustration_path,
       meta: data.meta,
-      chart: JSON.parse(data.chart_json) as PhichainChart,
+      chart,
       isDirty: false,
       isLoaded: true,
       _past: [],
       _future: [],
-    }),
+      lineTextures: new Map<string, Blob>(),
+      chartFontFamily: null,
+    });
+  },
 
   closeProject: () =>
     set({
@@ -234,6 +268,8 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       isLoaded: false,
       _past: [],
       _future: [],
+      lineTextures: new Map<string, Blob>(),
+      chartFontFamily: null,
     }),
 
   markClean: () => set({ isDirty: false }),
@@ -270,7 +306,7 @@ export const useChartStore = create<ChartState>()((set, get) => ({
     set(
       produce((state: ChartState) => {
         pushHistory(state);
-        const line = { ...createDefaultLine(), ...partial };
+        const line = { ...createDefaultLine(undefined, state.chart.lines.length), ...partial };
         state.chart.lines.push(line);
       }),
     ),
@@ -327,6 +363,9 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       produce((state: ChartState) => {
         if (lineIndex < 0 || lineIndex >= state.chart.lines.length) return;
         pushHistory(state);
+        if (!note.uid) {
+          note.uid = generateNoteUid();
+        }
         state.chart.lines[lineIndex].notes.push(note);
         sortNotes(state.chart.lines[lineIndex].notes);
       }),
@@ -401,6 +440,45 @@ export const useChartStore = create<ChartState>()((set, get) => ({
           }
         }
         sortEvents(line.events);
+      }),
+    ),
+
+  batchMultiLineMutations: (mutations) =>
+    set(
+      produce((state: ChartState) => {
+        if (mutations.length === 0) return;
+        pushHistory(state);
+        for (const mut of mutations) {
+          const line = state.chart.lines[mut.lineIndex];
+          if (!line) continue;
+          if (mut.noteEdits) {
+            for (const { noteIndex, changes } of mut.noteEdits) {
+              if (noteIndex >= 0 && noteIndex < line.notes.length) {
+                Object.assign(line.notes[noteIndex], changes);
+              }
+            }
+            sortNotes(line.notes);
+          }
+          if (mut.eventEdits) {
+            for (const { eventIndex, changes } of mut.eventEdits) {
+              if (eventIndex >= 0 && eventIndex < line.events.length) {
+                Object.assign(line.events[eventIndex], changes);
+              }
+            }
+          }
+          if (mut.removeEventIndices && mut.removeEventIndices.length > 0) {
+            const sorted = [...mut.removeEventIndices].sort((a, b) => b - a);
+            for (const idx of sorted) {
+              if (idx >= 0 && idx < line.events.length) {
+                line.events.splice(idx, 1);
+              }
+            }
+          }
+          if (mut.newEvents) {
+            line.events.push(...mut.newEvents);
+          }
+          sortEvents(line.events);
+        }
       }),
     ),
 
@@ -595,4 +673,27 @@ export const useChartStore = create<ChartState>()((set, get) => ({
   },
 
   clearIllustration: () => set({ illustrationImage: null }),
+
+  // ---- Line textures ----
+  setLineTexture: (name, blob) =>
+    set((state) => {
+      const newMap = new Map(state.lineTextures);
+      newMap.set(name, blob);
+      return { lineTextures: newMap };
+    }),
+
+  removeLineTexture: (name) =>
+    set((state) => {
+      const newMap = new Map(state.lineTextures);
+      newMap.delete(name);
+      return { lineTextures: newMap };
+    }),
+
+  clearLineTextures: () => set({ lineTextures: new Map<string, Blob>() }),
+
+  // ---- Extra config ----
+  setExtraConfig: (config) => set({ extraConfig: config }),
+
+  // ---- Chart font ----
+  setChartFontFamily: (family) => set({ chartFontFamily: family }),
 }));

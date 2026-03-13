@@ -12,7 +12,6 @@ import { useAudioStore } from "../../stores/audioStore";
 import { BpmList } from "../../utils/bpmList";
 import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import type { Note, LineEvent, NoteKind, EasingType, LineEventKind } from "../../types/chart";
-import { beatToFloat } from "../../types/chart";
 import { Field, SelectField, BeatField, EASING_OPTIONS } from "../common/FormFields";
 import { EVENT_COLORS } from "../LineEventEditor/EventEditorToolbar";
 
@@ -112,8 +111,10 @@ function MultiNoteSection({ count, lineIndex, indices }: { count: number; lineIn
 function EventSection({ event, lineIndex, eventIndex }: { event: LineEvent; lineIndex: number; eventIndex: number }) {
   const editEvent = useChartStore((s) => s.editEvent);
   const isTransition = "transition" in event.value;
-  const startVal = isTransition ? event.value.transition.start : event.value.constant;
-  const endVal = isTransition ? event.value.transition.end : event.value.constant;
+  const tv = isTransition ? (event.value as { transition: { start: number; end: number; easing: EasingType } }).transition : null;
+  const cv = !isTransition ? (event.value as { constant: number }).constant : null;
+  const startVal = tv ? tv.start : cv!;
+  const endVal = tv ? tv.end : cv!;
 
   return (
     <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--border-color)" }}>
@@ -129,15 +130,15 @@ function EventSection({ event, lineIndex, eventIndex }: { event: LineEvent; line
           else editEvent(lineIndex, eventIndex, { value: { transition: { start: startVal, end: endVal, easing: "linear" } } });
         }}
       />
-      {isTransition ? (
+      {isTransition && tv ? (
         <>
-          <Field label="Start" value={startVal} onChange={(v) => editEvent(lineIndex, eventIndex, { value: { transition: { start: parseFloat(v) || 0, end: event.value.transition.end, easing: event.value.transition.easing } } })} step="0.1" />
-          <Field label="End" value={endVal} onChange={(v) => editEvent(lineIndex, eventIndex, { value: { transition: { start: event.value.transition.start, end: parseFloat(v) || 0, easing: event.value.transition.easing } } })} step="0.1" />
+          <Field label="Start" value={startVal} onChange={(v) => editEvent(lineIndex, eventIndex, { value: { transition: { start: parseFloat(v) || 0, end: tv.end, easing: tv.easing } } })} step="0.1" />
+          <Field label="End" value={endVal} onChange={(v) => editEvent(lineIndex, eventIndex, { value: { transition: { start: tv.start, end: parseFloat(v) || 0, easing: tv.easing } } })} step="0.1" />
           <SelectField
             label="Easing"
-            value={typeof event.value.transition.easing === "string" ? event.value.transition.easing : "linear"}
+            value={typeof tv.easing === "string" ? tv.easing : "linear"}
             options={EASING_OPTIONS}
-            onChange={(v) => editEvent(lineIndex, eventIndex, { value: { transition: { start: event.value.transition.start, end: event.value.transition.end, easing: v as EasingType } } })}
+            onChange={(v) => editEvent(lineIndex, eventIndex, { value: { transition: { start: tv.start, end: tv.end, easing: v as EasingType } } })}
           />
           <Field label="Ease L" value={event.easing_left ?? 0} onChange={(v) => editEvent(lineIndex, eventIndex, { easing_left: parseFloat(v) || 0 })} step="0.05" />
           <Field label="Ease R" value={event.easing_right ?? 1} onChange={(v) => editEvent(lineIndex, eventIndex, { easing_right: parseFloat(v) || 1 })} step="0.05" />
@@ -204,7 +205,7 @@ function TimeScrub() {
   const [displayBeat, setDisplayBeat] = useState(0);
   const isDragging = useRef(false);
   const duration = useAudioStore((s) => s.duration);
-  const isPlaying = useAudioStore((s) => s.isPlaying);
+  void useAudioStore((s) => s.isPlaying); // subscribe for re-render
 
   // Update time display via requestAnimationFrame for smooth tracking
   useEffect(() => {
@@ -313,7 +314,7 @@ export function UnifiedInspector() {
       const cs = useChartStore.getState();
       const bpmList = new BpmList(cs.chart.bpm_list);
       const time = currentTime - cs.chart.offset;
-      const state = evaluateLineEventsWithLayers(line, time, (beat) => bpmList.timeAt(beat));
+      const state = evaluateLineEventsWithLayers(line.events, line.event_layers, bpmList.beatAtFloat(time));
       return state;
     } catch {
       return null;

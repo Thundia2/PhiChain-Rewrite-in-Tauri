@@ -127,9 +127,6 @@ export function useClipboard() {
     const beatOffset = currentBeat - clipboard.baseBeat;
 
     // Paste notes
-    const newNoteIndices: number[] = [];
-    const existingNoteCount = cs.chart.lines[es.selectedLineIndex].notes.length;
-
     for (const note of clipboard.notes) {
       const pasted: Note = {
         ...structuredClone(note),
@@ -149,15 +146,16 @@ export function useClipboard() {
       cs.addEvent(es.selectedLineIndex, pasted);
     }
 
-    // Select the pasted notes
+    // Select the pasted notes (find by beat since sorting may reorder)
     if (clipboard.notes.length > 0) {
+      const pastedBeats = clipboard.notes.map(n => beatToFloat(offsetBeat(n.beat, beatOffset)));
       const line = cs.chart.lines[es.selectedLineIndex];
-      const count = line.notes.length;
-      // The newest notes are at the end (after sorting)
-      es.setNoteSelection(
-        Array.from({ length: clipboard.notes.length }, (_, i) => existingNoteCount + i)
-          .filter(i => i < count)
-      );
+      const newSelection: number[] = [];
+      for (let i = 0; i < line.notes.length; i++) {
+        const b = beatToFloat(line.notes[i].beat);
+        if (pastedBeats.some(pb => Math.abs(pb - b) < 1e-9)) newSelection.push(i);
+      }
+      es.setNoteSelection(newSelection);
     }
   }, { preventDefault: true });
 }

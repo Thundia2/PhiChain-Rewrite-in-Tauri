@@ -56,6 +56,14 @@ export function LineDrawer() {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // ---- Inline prompt state (replaces window.prompt) ----
+  const [inlinePrompt, setInlinePrompt] = useState<{
+    label: string;
+    defaultValue: string;
+    onSubmit: (value: string) => void;
+  } | null>(null);
+  const inlinePromptRef = useRef<HTMLInputElement>(null);
+
   // Focus rename input when activated
   useEffect(() => {
     if (renamingIndex !== null && renameInputRef.current) {
@@ -290,20 +298,28 @@ export function LineDrawer() {
               setContextMenu(null);
             }},
             { label: "Set Parent...", action: () => {
-              const val = prompt("Parent line index (-1 for none):", String(lines[contextMenu.lineIndex]?.father_index ?? -1));
-              if (val !== null) {
-                const idx = parseInt(val);
-                editLine(contextMenu.lineIndex, { father_index: idx === -1 ? undefined : idx });
-              }
+              const li = contextMenu.lineIndex;
               setContextMenu(null);
+              setInlinePrompt({
+                label: "Parent line index (-1 for none)",
+                defaultValue: String(lines[li]?.father_index ?? -1),
+                onSubmit: (val) => {
+                  const idx = parseInt(val);
+                  if (!isNaN(idx)) editLine(li, { father_index: idx === -1 ? undefined : idx });
+                },
+              });
             }},
             { label: "Set Group...", action: () => {
-              const val = prompt("Group number:", String(lines[contextMenu.lineIndex]?.group ?? 0));
-              if (val !== null) {
-                const num = parseInt(val);
-                editLine(contextMenu.lineIndex, { group: isNaN(num) ? undefined : num === 0 ? undefined : num });
-              }
+              const li = contextMenu.lineIndex;
               setContextMenu(null);
+              setInlinePrompt({
+                label: "Group number",
+                defaultValue: String(lines[li]?.group ?? 0),
+                onSubmit: (val) => {
+                  const num = parseInt(val);
+                  editLine(li, { group: isNaN(num) ? undefined : num === 0 ? undefined : num });
+                },
+              });
             }},
           ].map((item) => (
             <button
@@ -327,6 +343,91 @@ export function LineDrawer() {
               {item.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Inline prompt overlay (replaces window.prompt) */}
+      {inlinePrompt && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 110,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0,0,0,0.4)",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setInlinePrompt(null); }}
+        >
+          <div
+            style={{
+              width: 260,
+              backgroundColor: "var(--bg-secondary)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 10,
+              padding: 16,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            }}
+          >
+            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 }}>
+              {inlinePrompt.label}
+            </div>
+            <input
+              ref={inlinePromptRef}
+              defaultValue={inlinePrompt.defaultValue}
+              autoFocus
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                borderRadius: 8,
+                fontSize: 12,
+                border: "0.5px solid var(--border-color)",
+                backgroundColor: "var(--bg-active)",
+                color: "var(--text-primary)",
+                fontFamily: "inherit",
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent-primary)"; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border-color)"; }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  inlinePrompt.onSubmit((e.target as HTMLInputElement).value);
+                  setInlinePrompt(null);
+                } else if (e.key === "Escape") {
+                  setInlinePrompt(null);
+                }
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 10 }}>
+              <button
+                style={{
+                  padding: "5px 12px", borderRadius: 6, fontSize: 11,
+                  color: "var(--text-secondary)", background: "transparent",
+                  border: "none", cursor: "pointer",
+                }}
+                onClick={() => setInlinePrompt(null)}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  padding: "5px 12px", borderRadius: 6, fontSize: 11,
+                  background: "var(--accent-primary)", color: "#fff",
+                  border: "none", cursor: "pointer",
+                }}
+                onClick={() => {
+                  if (inlinePromptRef.current) {
+                    inlinePrompt.onSubmit(inlinePromptRef.current.value);
+                  }
+                  setInlinePrompt(null);
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

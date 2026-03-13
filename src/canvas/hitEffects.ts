@@ -6,7 +6,11 @@
 //
 // When a respack sprite sheet is configured, renders animated
 // frames from the hit_fx.png grid instead of the default effect.
+//
+// Supports a hit sound callback for audio playback on hit.
 // ============================================================
+
+import type { NoteKind } from "../types/chart";
 
 interface Particle {
   angle: number;
@@ -19,6 +23,7 @@ interface HitEffect {
   y: number;
   spawnTime: number;
   rotation: number; // random rotation if hitFxRotate is enabled
+  color: string; // rgb string like "53, 181, 255"
   particles: Particle[];
 }
 
@@ -30,6 +35,7 @@ export interface HitEffectConfig {
   scale: number;
   rotate: boolean;
   hideParticles: boolean;
+  tinted: boolean;   // tint hit effects with line color (default true)
 }
 
 const DEFAULT_LIFETIME = 0.5;
@@ -40,10 +46,16 @@ export class HitEffectManager {
   private effects: HitEffect[] = [];
   private processedKeys = new Set<string>();
   private config: HitEffectConfig | null = null;
+  private onHitSound: ((kind: NoteKind) => void) | null = null;
 
   /** Set respack hit effect config (null = use default ring+particles) */
   setConfig(config: HitEffectConfig | null): void {
     this.config = config;
+  }
+
+  /** Set callback for playing hit sounds when notes are hit */
+  setHitSoundCallback(cb: ((kind: NoteKind) => void) | null): void {
+    this.onHitSound = cb;
   }
 
   /**
@@ -57,16 +69,31 @@ export class HitEffectManager {
     screenX: number,
     screenY: number,
     currentTime: number,
+    noteKind?: NoteKind,
+    lineColor?: [number, number, number] | null,
   ): void {
     if (noteBeat > currentBeat) return; // Not hit yet
     if (this.processedKeys.has(key)) return; // Already spawned
 
     this.processedKeys.add(key);
+
+    // Play hit sound
+    if (this.onHitSound && noteKind) {
+      this.onHitSound(noteKind);
+    }
+
+    // When tinted (default true), use the judgment line's color for particles
+    const tinted = this.config ? this.config.tinted : true;
+    const effectColor = (tinted && lineColor)
+      ? `${lineColor[0]}, ${lineColor[1]}, ${lineColor[2]}`
+      : EFFECT_COLOR;
+
     this.effects.push({
       x: screenX,
       y: screenY,
       spawnTime: currentTime,
       rotation: this.config?.rotate ? Math.random() * Math.PI * 2 : 0,
+      color: effectColor,
       particles: Array.from({ length: PARTICLE_COUNT }, () => ({
         angle: Math.random() * Math.PI * 2,
         speed: 80 + Math.random() * 120,
@@ -135,7 +162,7 @@ export class HitEffectManager {
         const px = effect.x + Math.cos(p.angle) * p.speed * eased;
         const py = effect.y + Math.sin(p.angle) * p.speed * eased;
         const size = p.size * (1 - progress);
-        ctx.fillStyle = `rgba(${EFFECT_COLOR}, ${1 - progress})`;
+        ctx.fillStyle = `rgba(${effect.color}, ${1 - progress})`;
         ctx.fillRect(px - size / 2, py - size / 2, size, size);
       }
     }
@@ -153,7 +180,7 @@ export class HitEffectManager {
     const ringRadius = 30 * eased;
     ctx.beginPath();
     ctx.arc(effect.x, effect.y, ringRadius, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(${EFFECT_COLOR}, ${1 - progress})`;
+    ctx.strokeStyle = `rgba(${effect.color}, ${1 - progress})`;
     ctx.lineWidth = 3 * (1 - progress);
     ctx.stroke();
 
@@ -162,7 +189,7 @@ export class HitEffectManager {
       const px = effect.x + Math.cos(p.angle) * p.speed * eased;
       const py = effect.y + Math.sin(p.angle) * p.speed * eased;
       const size = p.size * (1 - progress);
-      ctx.fillStyle = `rgba(${EFFECT_COLOR}, ${1 - progress})`;
+      ctx.fillStyle = `rgba(${effect.color}, ${1 - progress})`;
       ctx.fillRect(px - size / 2, py - size / 2, size, size);
     }
   }

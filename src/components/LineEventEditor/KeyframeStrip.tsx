@@ -216,7 +216,7 @@ export function KeyframeStrip({ lineIndex }: KeyframeStripProps) {
     // Also seek audio to this beat
     const cs = useChartStore.getState();
     const bpmList = new BpmList(cs.chart.bpm_list);
-    const time = bpmList.timeAt(beat) + cs.chart.offset;
+    const time = bpmList.timeAtFloat(beat) + cs.chart.offset;
     useAudioStore.getState().seek(time);
 
     isDragging.current = true;
@@ -233,7 +233,7 @@ export function KeyframeStrip({ lineIndex }: KeyframeStripProps) {
 
     const cs = useChartStore.getState();
     const bpmList = new BpmList(cs.chart.bpm_list);
-    const time = bpmList.timeAt(beat) + cs.chart.offset;
+    const time = bpmList.timeAtFloat(beat) + cs.chart.offset;
     useAudioStore.getState().seek(time);
   }, [pixelToBeat]);
 

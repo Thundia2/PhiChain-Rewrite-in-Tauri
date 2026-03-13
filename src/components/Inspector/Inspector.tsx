@@ -1,8 +1,109 @@
+import { useMemo, useEffect, useRef } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
-import type { Note, LineEvent, Beat, NoteKind, EasingType } from "../../types/chart";
-import { beatToFloat, floatToBeat } from "../../types/chart";
+import type { Note, LineEvent, NoteKind, EasingType } from "../../types/chart";
 import { Field, SelectField, BeatField, EASING_OPTIONS } from "../common/FormFields";
+
+/** Texture thumbnail + upload/remove for a line's custom texture */
+function TexturePreview({ textureName, lineIndex }: { textureName?: string; lineIndex: number }) {
+  const lineTextures = useChartStore((s) => s.lineTextures);
+  const setLineTexture = useChartStore((s) => s.setLineTexture);
+  const editLine = useChartStore((s) => s.editLine);
+
+  const previewUrl = useMemo(() => {
+    if (!textureName) return null;
+    const blob = lineTextures.get(textureName);
+    if (!blob) return null;
+    return URL.createObjectURL(blob);
+  }, [textureName, lineTextures]);
+
+  // Revoke previous blob URLs to prevent memory leaks
+  const prevUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevUrlRef.current && prevUrlRef.current !== previewUrl) {
+      URL.revokeObjectURL(prevUrlRef.current);
+    }
+    prevUrlRef.current = previewUrl;
+    return () => {
+      if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
+    };
+  }, [previewUrl]);
+
+  const handleUpload = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".png,.jpg,.jpeg,.webp,.gif";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+      setLineTexture(file.name, blob);
+      editLine(lineIndex, { texture: file.name });
+    };
+    input.click();
+  };
+
+  const handleRemove = () => {
+    editLine(lineIndex, { texture: undefined });
+  };
+
+  return (
+    <div style={{ marginTop: 2, marginBottom: 4 }}>
+      {previewUrl && (
+        <img
+          src={previewUrl}
+          alt={textureName}
+          style={{
+            maxWidth: "100%",
+            maxHeight: 80,
+            borderRadius: 4,
+            border: "1px solid var(--border)",
+            marginBottom: 4,
+            objectFit: "contain",
+            background: "rgba(0,0,0,0.3)",
+          }}
+        />
+      )}
+      {textureName && !previewUrl && (
+        <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+          Image not loaded ({textureName})
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 4 }}>
+        <button
+          onClick={handleUpload}
+          style={{
+            fontSize: 10,
+            padding: "2px 6px",
+            background: "var(--accent-primary)",
+            color: "#fff",
+            border: "none",
+            borderRadius: 3,
+            cursor: "pointer",
+          }}
+        >
+          {textureName ? "Change..." : "+ Add Texture"}
+        </button>
+        {textureName && (
+          <button
+            onClick={handleRemove}
+            style={{
+              fontSize: 10,
+              padding: "2px 6px",
+              background: "var(--error)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 3,
+              cursor: "pointer",
+            }}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const NOTE_KIND_OPTIONS = [
   { value: "tap", label: "Tap" },
@@ -10,14 +111,6 @@ const NOTE_KIND_OPTIONS = [
   { value: "flick", label: "Flick" },
   { value: "hold", label: "Hold" },
 ];
-
-function getEasingName(easing: EasingType): string {
-  if (typeof easing === "string") return easing;
-  if ("custom" in easing) return `bezier(${easing.custom.join(",")})`;
-  if ("steps" in easing) return `steps(${easing.steps})`;
-  if ("elastic" in easing) return `elastic(${easing.elastic})`;
-  return "unknown";
-}
 
 function NoteInspector({ note, lineIndex, noteIndex }: { note: Note; lineIndex: number; noteIndex: number }) {
   const editNote = useChartStore((s) => s.editNote);
@@ -111,8 +204,10 @@ function EventInspectorPanel({ event, lineIndex, eventIndex }: { event: LineEven
   const editEvent = useChartStore((s) => s.editEvent);
 
   const isTransition = "transition" in event.value;
-  const startVal = isTransition ? event.value.transition.start : event.value.constant;
-  const endVal = isTransition ? event.value.transition.end : event.value.constant;
+  const tv = isTransition ? (event.value as { transition: { start: number; end: number; easing: EasingType } }).transition : null;
+  const cv = !isTransition ? (event.value as { constant: number }).constant : null;
+  const startVal = tv ? tv.start : cv!;
+  const endVal = tv ? tv.end : cv!;
 
   return (
     <div className="flex flex-col gap-1.5 p-2">
@@ -146,7 +241,7 @@ function EventInspectorPanel({ event, lineIndex, eventIndex }: { event: LineEven
           }
         }}
       />
-      {isTransition ? (
+      {isTransition && tv ? (
         <>
           <Field
             label="Start val"
@@ -156,8 +251,8 @@ function EventInspectorPanel({ event, lineIndex, eventIndex }: { event: LineEven
                 value: {
                   transition: {
                     start: parseFloat(v) || 0,
-                    end: event.value.transition.end,
-                    easing: event.value.transition.easing,
+                    end: tv.end,
+                    easing: tv.easing,
                   },
                 },
               })
@@ -171,9 +266,9 @@ function EventInspectorPanel({ event, lineIndex, eventIndex }: { event: LineEven
               editEvent(lineIndex, eventIndex, {
                 value: {
                   transition: {
-                    start: event.value.transition.start,
+                    start: tv.start,
                     end: parseFloat(v) || 0,
-                    easing: event.value.transition.easing,
+                    easing: tv.easing,
                   },
                 },
               })
@@ -182,14 +277,14 @@ function EventInspectorPanel({ event, lineIndex, eventIndex }: { event: LineEven
           />
           <SelectField
             label="Easing"
-            value={typeof event.value.transition.easing === "string" ? event.value.transition.easing : "linear"}
+            value={typeof tv.easing === "string" ? tv.easing : "linear"}
             options={EASING_OPTIONS}
             onChange={(v) =>
               editEvent(lineIndex, eventIndex, {
                 value: {
                   transition: {
-                    start: event.value.transition.start,
-                    end: event.value.transition.end,
+                    start: tv.start,
+                    end: tv.end,
                     easing: v as EasingType,
                   },
                 },
@@ -287,6 +382,7 @@ function LineInspector({ lineIndex }: { lineIndex: number }) {
         value={line.texture ?? ""}
         onChange={(v) => editLine(lineIndex, { texture: v || undefined })}
       />
+      <TexturePreview textureName={line.texture} lineIndex={lineIndex} />
       <SelectField
         label="Rot w/ Father"
         value={line.rotate_with_father === false ? "false" : "true"}

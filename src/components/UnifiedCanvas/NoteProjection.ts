@@ -13,7 +13,7 @@
 // ============================================================
 
 import type { Line, Beat } from "../../types/chart";
-import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../../types/chart";
+import { CANVAS_WIDTH } from "../../types/chart";
 import { distanceAt } from "../../canvas/events";
 import { snapBeat } from "../../utils/beat";
 import type { BpmList } from "../../utils/bpmList";
@@ -149,9 +149,11 @@ export function beatFromScreenDistance(
   const bpmTimeAt = (beat: Beat) => bpmList.timeAt(beat);
 
   const currentDistance = distanceAt(speedEvents, currentTime, bpmTimeAt);
+  const bpmFactor = line.bpm_factor ?? 1;
 
   // Target distance the note would be at
-  const targetDistance = currentDistance + pixelDistance / distanceScale;
+  // Rendering divides distance deltas by bpmFactor, so the inverse multiplies
+  const targetDistance = currentDistance + (pixelDistance * bpmFactor) / distanceScale;
 
   // Binary search: find time t where distanceAt(speedEvents, t, bpmTimeAt) ≈ targetDistance
   let lo = currentTime;

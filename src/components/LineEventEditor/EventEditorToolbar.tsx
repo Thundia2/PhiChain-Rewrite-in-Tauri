@@ -20,6 +20,7 @@ export const EVENT_COLORS: Record<LineEventKind, string> = {
   color: "#e599f7",
   text: "#a9e34b",
   incline: "#74c0fc",
+  gif: "#f06595",
 };
 
 const CORE_PROPERTIES: { kind: LineEventKind; short: string; full: string }[] = [
@@ -36,6 +37,7 @@ const EXTENDED_PROPERTIES: { kind: LineEventKind; short: string; full: string }[
   { kind: "color", short: "C", full: "Color" },
   { kind: "text", short: "T", full: "Text" },
   { kind: "incline", short: "I", full: "Incline" },
+  { kind: "gif", short: "GIF", full: "GIF Progress" },
 ];
 
 export function EventEditorToolbar() {

@@ -19,7 +19,8 @@
 
 import type { Line, Note, Beat, LineEvent, NoteControlEntry, NoteKind } from "../types/chart";
 import { CANVAS_WIDTH, CANVAS_HEIGHT, beatToFloat } from "../types/chart";
-import { evaluateLineEvents, evaluateLineEventsWithLayers, distanceAt } from "./events";
+import { evaluateLineEventsWithLayers, distanceAt, computeWorldTransforms } from "./events";
+import type { WorldTransform } from "./events";
 import { evaluateEasing } from "./easings";
 import { BpmList } from "../utils/bpmList";
 import { generateCurveNotes } from "../utils/curveNoteTrack";
@@ -158,11 +159,17 @@ export interface RenderOptions {
   // Highlight a specific line (for event editor context)
   highlightLineIndex?: number | null;
 
+  // Chart-level font family for text events
+  chartFontFamily?: string | null;
+
   // Resource pack (note textures, hit effect sprites)
   respack?: LoadedRespack | null;
 
   // Lines to skip rendering (for unified editor visibility toggles)
   hiddenLineIndices?: Set<number> | null;
+
+  // Multi-selected lines (batch editing highlight)
+  multiSelectedLineIndices?: Set<number> | null;
 }
 
 export class GameRenderer {
@@ -254,6 +261,9 @@ export class GameRenderer {
       }
     }
 
+    // ---- Pre-compute parent-child world transforms for all lines ----
+    const worldTransforms = computeWorldTransforms(lines, currentBeat, canvasWidth, canvasHeight);
+
     // ---- Render each line (sorted by z_order, lower = further back) ----
     const lineOrder = lines.map((_, i) => i)
       .sort((a, b) => (lines[a].z_order ?? 0) - (lines[b].z_order ?? 0));
@@ -275,7 +285,7 @@ export class GameRenderer {
       const lineInfo = this.renderLine(
         ctx, lines[lineIdx], lineIdx, currentBeat, time, bpmTimeAt,
         canvasWidth, canvasHeight, distanceScale, noteW, noteH,
-        options, multiBeats,
+        options, multiBeats, worldTransforms[lineIdx],
       );
       if (lineInfo) {
         renderResult.lines.push(lineInfo);
@@ -311,11 +321,25 @@ export class GameRenderer {
     noteH: number,
     options: RenderOptions,
     multiBeats: Set<number> | null,
+    worldTransform: WorldTransform,
   ): RenderedLineInfo | null {
-    const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
+    // FIX 1: Use pre-computed world transform (parent-child hierarchy resolved)
+    const state = worldTransform.localState;
 
-    const screenX = canvasWidth / 2 + (state.x / CANVAS_WIDTH) * canvasWidth;
-    const screenY = canvasHeight / 2 - (state.y / CANVAS_HEIGHT) * canvasHeight;
+    // FIX 5: Default alpha -255 before beat 0 (RPE spec)
+    if (currentBeat < 0 && !line.attach_ui) {
+      const hasAlphaEvents = line.event_layers && line.event_layers.length > 0
+        ? line.event_layers.some(l => l.alpha_events.length > 0)
+        : line.events.some(e => e.kind === "opacity");
+      if (!hasAlphaEvents) {
+        state.opacity = -1.0; // -255/255
+      }
+    }
+
+    // FIX 1: World-space position and rotation (includes parent transforms)
+    const screenX = worldTransform.worldX;
+    const screenY = worldTransform.worldY;
+    const worldRotation = worldTransform.worldRotation;
 
     // Collect position data for RenderResult
     const renderedNotes: RenderedNoteInfo[] = [];
@@ -323,7 +347,7 @@ export class GameRenderer {
       lineIndex,
       screenX,
       screenY,
-      rotation: state.rotation,
+      rotation: worldRotation,
       opacity: state.opacity,
       scaleX: state.scale_x,
       scaleY: state.scale_y,
@@ -332,7 +356,7 @@ export class GameRenderer {
 
     ctx.save();
     ctx.translate(screenX, screenY);
-    ctx.rotate(-state.rotation);
+    ctx.rotate(-worldRotation);
 
     // Apply extended transforms
     if (state.scale_x !== 1 || state.scale_y !== 1) {
@@ -345,13 +369,16 @@ export class GameRenderer {
     const speedEvents = line.events.filter((e) => e.kind === "speed");
     const currentDistance = distanceAt(speedEvents, currentTime, bpmTimeAt);
 
+    // FIX 2: bpmfactor — divides effective BPM for note speed on this line
+    const bpmFactor = line.bpm_factor ?? 1;
+
     const isSelectedLine = lineIndex === options.selectedLineIndex;
     const selectedSet = isSelectedLine && options.selectedNoteIndices
       ? new Set(options.selectedNoteIndices)
       : null;
 
-    // ---- Draw notes (skipped when hideNotes is set) ----
-    if (!options.hideNotes) {
+    // ---- Draw notes (skipped when hideNotes is set or line alpha is negative per RPE spec) ----
+    if (!options.hideNotes && state.opacity >= 0) {
       // Regular notes
       for (let noteIdx = 0; noteIdx < line.notes.length; noteIdx++) {
         const note = line.notes[noteIdx];
@@ -367,11 +394,13 @@ export class GameRenderer {
 
         const noteDistance = distanceAt(speedEvents, noteTime, bpmTimeAt);
         const yOffset = (note.y_offset ?? 0) * 2 / CANVAS_HEIGHT * note.speed * distanceScale;
-        const rawY = (noteDistance - currentDistance) * note.speed * distanceScale + yOffset;
+        // FIX 2: divide distance delta by bpmFactor (affects visual approach speed only)
+        const rawY = ((noteDistance - currentDistance) / bpmFactor) * note.speed * distanceScale + yOffset;
         const noteX = (note.x / CANVAS_WIDTH) * canvasWidth;
 
-        // Per-note size and alpha
-        let noteSizeMul = note.size ?? 1.0;
+        // FIX 9: note.size controls WIDTH only; size_control controls both dimensions
+        const noteWidthSize = note.size ?? 1.0;
+        let sizeControlMul = 1.0;
         let noteAlpha = (note.alpha ?? 255) / 255;
         let noteXOffset = 0;
 
@@ -379,14 +408,14 @@ export class GameRenderer {
         const controlPos = Math.max(0, Math.min(1, rawY / (canvasHeight * 2)));
         if (line.pos_control) noteXOffset = evaluateNoteControl(line.pos_control, controlPos) - 1;
         if (line.alpha_control) noteAlpha *= evaluateNoteControl(line.alpha_control, controlPos);
-        if (line.size_control) noteSizeMul *= evaluateNoteControl(line.size_control, controlPos);
+        if (line.size_control) sizeControlMul = evaluateNoteControl(line.size_control, controlPos);
         if (line.y_control) {
-          const yMul = evaluateNoteControl(line.y_control, controlPos);
-          // y_control scales the vertical distance from line
+          // y_control scales the vertical distance from line (applied via control system)
+          evaluateNoteControl(line.y_control, controlPos);
         }
 
-        const scaledNoteW = noteW * noteSizeMul;
-        const scaledNoteH = noteH * noteSizeMul;
+        const scaledNoteW = noteW * noteWidthSize * sizeControlMul;
+        const scaledNoteH = noteH * sizeControlMul;
 
         // Determine note color
         const isSelected = selectedSet?.has(noteIdx) ?? false;
@@ -404,12 +433,12 @@ export class GameRenderer {
           this.drawHoldNote(
             ctx, note, rawY, finalNoteX, scaledNoteW, scaledNoteH, color,
             currentDistance, distanceScale, speedEvents, bpmTimeAt,
-            canvasHeight, isMulti, options.respack,
+            canvasHeight, isMulti, options.respack, bpmFactor,
           );
           // Collect hold note head position for hit-testing
           const holdScreenNoteY = note.above ? -Math.max(rawY, 0) : Math.max(rawY, 0);
-          const cos = Math.cos(-state.rotation);
-          const sin = Math.sin(-state.rotation);
+          const cos = Math.cos(-worldRotation);
+          const sin = Math.sin(-worldRotation);
           renderedNotes.push({
             noteIndex: noteIdx,
             screenX: screenX + (finalNoteX * cos - holdScreenNoteY * sin) * state.scale_x,
@@ -421,14 +450,15 @@ export class GameRenderer {
             beat: noteBeatF,
           });
         } else {
-          if (rawY < 0) { ctx.globalAlpha = prevAlpha; continue; }
+          // FIX 6: isCover — only hide passed notes when is_cover is not explicitly false
+          if (rawY < 0 && line.is_cover !== false) { ctx.globalAlpha = prevAlpha; continue; }
           const screenNoteY = note.above ? -rawY : rawY;
           if (Math.abs(screenNoteY) > canvasHeight * 2) { ctx.globalAlpha = prevAlpha; continue; }
           this.drawNote(ctx, note, finalNoteX, screenNoteY, scaledNoteW, scaledNoteH, color, isMulti, options.respack);
 
           // Collect note position for hit-testing (transform local to absolute)
-          const cos = Math.cos(-state.rotation);
-          const sin = Math.sin(-state.rotation);
+          const cos = Math.cos(-worldRotation);
+          const sin = Math.sin(-worldRotation);
           renderedNotes.push({
             noteIndex: noteIdx,
             screenX: screenX + (finalNoteX * cos - screenNoteY * sin) * state.scale_x,
@@ -444,14 +474,19 @@ export class GameRenderer {
         ctx.globalAlpha = prevAlpha;
 
         // Hit effect spawning
-        if (options.hitEffectManager && options.isPlaying && options.showHitEffects !== false) {
-          const cos = Math.cos(-state.rotation);
-          const sin = Math.sin(-state.rotation);
-          const hitX = screenX + noteX * cos;
-          const hitY = screenY + noteX * sin;
+        // FIX 8: Fake notes have no hit effects, no sound, no scoring
+        // FIX 10: yOffset affects hit effect position — project yOffset along line's normal
+        if (!note.fake && options.hitEffectManager && options.isPlaying && options.showHitEffects !== false) {
+          const cos = Math.cos(-worldRotation);
+          const sin = Math.sin(-worldRotation);
+          const noteYOff = (note.y_offset ?? 0) * 2 / CANVAS_HEIGHT * note.speed * distanceScale;
+          const localHitY = (note.above ? -1 : 1) * noteYOff;
+          const hitX = screenX + noteX * cos - localHitY * sin;
+          const hitY = screenY + noteX * sin + localHitY * cos;
           options.hitEffectManager.trySpawnEffect(
             `${lineIndex}-${noteIdx}`, noteBeatF, currentBeat,
             hitX, hitY, currentTime,
+            note.kind, state.color,
           );
         }
       }
@@ -472,7 +507,7 @@ export class GameRenderer {
 
           const cnTime = bpmTimeAt(cn.beat);
           const cnDistance = distanceAt(speedEvents, cnTime, bpmTimeAt);
-          const cnRawY = (cnDistance - currentDistance) * cn.speed * distanceScale;
+          const cnRawY = ((cnDistance - currentDistance) / bpmFactor) * cn.speed * distanceScale;
           if (cnRawY < 0) continue;
 
           const cnX = (cn.x / CANVAS_WIDTH) * canvasWidth;
@@ -488,12 +523,11 @@ export class GameRenderer {
     }
 
     // ---- Draw pending/ghost note ----
-    if (!options.hideNotes && options.pendingNote && options.pendingLineIndex === lineIndex) {
+    if (!options.hideNotes && state.opacity >= 0 && options.pendingNote && options.pendingLineIndex === lineIndex) {
       const pn = options.pendingNote;
-      const pnBeatF = beatToFloat(pn.beat);
       const pnTime = bpmTimeAt(pn.beat);
       const pnDistance = distanceAt(speedEvents, pnTime, bpmTimeAt);
-      const pnRawY = (pnDistance - currentDistance) * 1.0 * distanceScale;
+      const pnRawY = ((pnDistance - currentDistance) / bpmFactor) * 1.0 * distanceScale;
 
       if (pnRawY >= 0) {
         const pnX = (pn.x / CANVAS_WIDTH) * canvasWidth;
@@ -510,37 +544,92 @@ export class GameRenderer {
       const lineHalfW = canvasWidth * 1.5;
       ctx.globalAlpha = state.opacity;
 
-      // Try custom line texture first
-      const lineTexture = line.texture ? this.textureCache.get(line.texture) : null;
-      if (lineTexture) {
-        const texAspect = lineTexture.naturalHeight / lineTexture.naturalWidth;
-        const texW = lineHalfW * 2;
-        const texH = texW * texAspect;
-        const anchor = line.anchor ?? [0.5, 0.5];
-        ctx.drawImage(lineTexture,
-          -texW * anchor[0], -texH * anchor[1],
-          texW, texH);
-      } else {
-        // Default white line (or colored)
-        if (state.color) {
-          ctx.fillStyle = `rgb(${state.color[0]}, ${state.color[1]}, ${state.color[2]})`;
+      // Per RPE spec: a judgment line with ANY text events is always hidden
+      // (line rect and custom texture are not drawn), only the text is displayed.
+      const lineHasTextEvents = line.events.some((e) => e.kind === "text");
+
+      if (!lineHasTextEvents) {
+        // Try custom line texture first
+        const lineTexture = line.texture ? this.textureCache.get(line.texture) : null;
+        if (lineTexture) {
+          const texAspect = lineTexture.naturalHeight / lineTexture.naturalWidth;
+          const texW = lineHalfW * 2;
+          const texH = texW * texAspect;
+          const anchor = line.anchor ?? [0.5, 0.5];
+          ctx.drawImage(lineTexture,
+            -texW * anchor[0], -texH * anchor[1],
+            texW, texH);
         } else {
-          ctx.fillStyle = "#ffffff";
+          // Default white line (or colored)
+          // FIX 15: colorPerfect/colorGood — tint line when FC/AP indicator active
+          if (state.color) {
+            ctx.fillStyle = `rgb(${state.color[0]}, ${state.color[1]}, ${state.color[2]})`;
+          } else if (options.isPlaying && options.showFcApIndicator && options.isFcValid && options.respack?.config?.colorPerfect) {
+            ctx.fillStyle = options.respack.config.colorPerfect;
+          } else {
+            ctx.fillStyle = "#ffffff";
+          }
+          ctx.fillRect(-lineHalfW, -LINE_THICKNESS / 2, lineHalfW * 2, LINE_THICKNESS);
         }
-        ctx.fillRect(-lineHalfW, -LINE_THICKNESS / 2, lineHalfW * 2, LINE_THICKNESS);
       }
 
       // Draw text event if present
       if (state.text) {
-        ctx.font = "14px sans-serif";
+        const textFontSize = Math.round(canvasHeight * 40 / 900);
+        // FIX 16: Per-event font field takes priority, then chart-level, then default
+        const activeTextEvent = line.events.find(e =>
+          e.kind === "text" &&
+          beatToFloat(e.start_beat) <= currentBeat &&
+          beatToFloat(e.end_beat) >= currentBeat
+        );
+        const fontFamily = activeTextEvent?.font || options.chartFontFamily || "sans-serif";
+        ctx.font = `bold ${textFontSize}px "${fontFamily}", sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillStyle = state.color
+        // Per RPE spec: when there are text events but no color events,
+        // text color is always white.
+        const lineHasColorEvents = line.events.some((e) => e.kind === "color");
+        ctx.fillStyle = (state.color && lineHasColorEvents)
           ? `rgb(${state.color[0]}, ${state.color[1]}, ${state.color[2]})`
           : "#ffffff";
-        ctx.fillText(state.text, 0, 0);
+        // FIX 11: %P% interpolation — replace with easing progress of active text event
+        let displayText = state.text;
+        if (displayText.includes("%P%")) {
+          if (activeTextEvent) {
+            const tStart = beatToFloat(activeTextEvent.start_beat);
+            const tEnd = beatToFloat(activeTextEvent.end_beat);
+            const progress = tEnd > tStart ? (currentBeat - tStart) / (tEnd - tStart) : 0;
+            displayText = displayText.replace(/%P%/g, progress.toFixed(2));
+          } else {
+            displayText = displayText.replace(/%P%/g, "0");
+          }
+        }
+        // FIX 12: \n newline support — split literal "\n" and render each line
+        const textLines = displayText.split("\\n");
+        if (textLines.length <= 1) {
+          ctx.fillText(displayText, 0, 0);
+        } else {
+          const lineHeight = textFontSize * 1.2;
+          const totalHeight = (textLines.length - 1) * lineHeight;
+          for (let tl = 0; tl < textLines.length; tl++) {
+            ctx.fillText(textLines[tl], 0, -totalHeight / 2 + tl * lineHeight);
+          }
+        }
       }
       ctx.globalAlpha = 1;
+    }
+
+    // ---- Draw multi-selected line highlight ----
+    if (options.multiSelectedLineIndices?.has(lineIndex) && state.opacity > 0) {
+      const lineHalfW = canvasWidth * 1.5;
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      ctx.strokeRect(-lineHalfW, -6, lineHalfW * 2, 12);
+      ctx.setLineDash([]);
+      ctx.restore();
     }
 
     // ---- Draw anchor marker ----
@@ -560,14 +649,8 @@ export class GameRenderer {
 
     ctx.restore();
 
-    // ---- Render children recursively ----
-    for (const child of line.children) {
-      this.renderLine(
-        ctx, child, lineIndex, currentBeat, currentTime, bpmTimeAt,
-        canvasWidth, canvasHeight, distanceScale, noteW, noteH,
-        options, multiBeats,
-      );
-    }
+    // FIX 1: Parent-child hierarchy is now resolved via computeWorldTransforms()
+    // using father_index. The old children[] recursion is removed.
 
     return lineInfo;
   }
@@ -605,7 +688,9 @@ export class GameRenderer {
   /** Determine the color for a note based on selection and FC/AP state */
   private getNoteColor(note: Note, isSelected: boolean, options: RenderOptions): string {
     if (isSelected) return SELECTED_COLOR;
-    if (options.isPlaying && options.showFcApIndicator && options.isFcValid) return PERFECT_COLOR;
+    if (options.isPlaying && options.showFcApIndicator && options.isFcValid) {
+      return options.respack?.config?.colorPerfect ?? PERFECT_COLOR;
+    }
     return NOTE_COLORS[note.kind] ?? "#ffffff";
   }
 
@@ -711,9 +796,10 @@ export class GameRenderer {
     distanceScale: number,
     speedEvents: LineEvent[],
     bpmTimeAt: (beat: Beat) => number,
-    canvasHeight: number,
+    _canvasHeight: number,
     isMultiHighlight: boolean,
     respack?: LoadedRespack | null,
+    bpmFactor: number = 1,
   ) {
     if (!note.hold_beat) return;
 
@@ -724,9 +810,12 @@ export class GameRenderer {
     ];
     const holdEndTime = bpmTimeAt(endBeat);
     const holdEndDistance = distanceAt(speedEvents, holdEndTime, bpmTimeAt);
-    const rawEndY = (holdEndDistance - currentDistance) * note.speed * distanceScale;
+    // FIX 2: Apply bpmFactor to hold end distance
+    const rawEndY = ((holdEndDistance - currentDistance) / bpmFactor) * note.speed * distanceScale;
 
-    const headY = Math.max(rawY, 0);
+    // FIX 13: holdKeepHead — optionally keep showing the head after it passes the line
+    const holdKeepHead = respack?.config?.holdKeepHead ?? false;
+    const headY = holdKeepHead ? rawY : Math.max(rawY, 0);
     const tailY = rawEndY;
     if (tailY < 0) return;
 
@@ -750,17 +839,32 @@ export class GameRenderer {
       const headTexH = noteW * headAspect;
       const tailTexH = noteW * tailAspect;
 
-      // Body (stretched)
+      // Body — FIX 13: holdRepeat tiles the body texture instead of stretching
       ctx.globalAlpha = 0.9;
-      ctx.drawImage(holdParts.body, noteX - noteW / 2, top, noteW, bodyHeight);
-
-      // Head
-      if (rawY >= 0) {
-        ctx.drawImage(holdParts.head, noteX - noteW / 2, screenHeadY - headTexH / 2, noteW, headTexH);
+      if (respack?.config?.holdRepeat && holdParts.body.naturalWidth > 0) {
+        const pattern = ctx.createPattern(holdParts.body, "repeat-y");
+        if (pattern) {
+          ctx.fillStyle = pattern;
+          ctx.fillRect(noteX - noteW / 2, top, noteW, bodyHeight);
+        } else {
+          ctx.drawImage(holdParts.body, noteX - noteW / 2, top, noteW, bodyHeight);
+        }
+      } else {
+        ctx.drawImage(holdParts.body, noteX - noteW / 2, top, noteW, bodyHeight);
       }
 
-      // Tail
-      ctx.drawImage(holdParts.tail, noteX - noteW / 2, screenTailY - tailTexH / 2, noteW, tailTexH);
+      // FIX 13: holdCompact — overlap head/tail over body edges
+      if (respack?.config?.holdCompact) {
+        // Compact mode: head overlaps start of body, tail overlaps end of body
+        ctx.drawImage(holdParts.head, noteX - noteW / 2, top - headTexH / 2, noteW, headTexH);
+        ctx.drawImage(holdParts.tail, noteX - noteW / 2, top + bodyHeight - tailTexH / 2, noteW, tailTexH);
+      } else {
+        // Normal: head at headY, tail at tailY
+        if (rawY >= 0 || holdKeepHead) {
+          ctx.drawImage(holdParts.head, noteX - noteW / 2, screenHeadY - headTexH / 2, noteW, headTexH);
+        }
+        ctx.drawImage(holdParts.tail, noteX - noteW / 2, screenTailY - tailTexH / 2, noteW, tailTexH);
+      }
     } else {
       // Fallback: colored rectangles
       ctx.fillStyle = color;

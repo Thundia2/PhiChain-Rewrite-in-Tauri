@@ -10,7 +10,7 @@
 // ============================================================
 
 import { create } from "zustand";
-import type { EditorTool, NoteSideFilter, LineSortMode } from "../types/editor";
+import type { EditorTool, NoteSideFilter, LineSortMode, PanelId } from "../types/editor";
 import type { Beat, NoteKind, LineEventKind } from "../types/chart";
 
 export interface DragSelectionRect {
@@ -74,6 +74,16 @@ export interface EditorState {
     startValue: { x: number; y: number; rotation: number };
   } | null;
 
+  // ---- Beat-sync placement ----
+  beatSyncPlacement: boolean;
+
+  // ---- Improvisation mode ----
+  improvisationMode: boolean;
+  improvisationNoteKind: NoteKind;
+
+  // ---- Multi-line selection (batch editing) ----
+  multiSelectedLineIndices: number[];
+
   // ---- Unified Canvas state ----
   canvasInteractionMode:
     | "idle"
@@ -92,6 +102,10 @@ export interface EditorState {
   lineLocked: Record<number, boolean>;
   lineDrawerOpen: boolean;
   unifiedInspectorOpen: boolean;
+  canvasActivePanelId: PanelId | null;  // Active bottom panel in canvas mode
+  canvasPanelHeight: number;            // Height of the bottom panel drawer
+  keyframeBarOpen: boolean;
+  keyframeBarHeight: number;            // 50-200px range, default 90
 
   // ---- Selection actions ----
   selectLine: (index: number | null) => void;
@@ -139,6 +153,18 @@ export interface EditorState {
   setEventEditorActiveLayer: (layer: number) => void;
   setEventEditorDragState: (state: EditorState["eventEditorDragState"]) => void;
 
+  // ---- Beat-sync placement actions ----
+  toggleBeatSyncPlacement: () => void;
+
+  // ---- Improvisation mode actions ----
+  toggleImprovisationMode: () => void;
+  setImprovisationNoteKind: (kind: NoteKind) => void;
+
+  // ---- Multi-line selection actions ----
+  setMultiSelectedLines: (indices: number[]) => void;
+  toggleMultiSelectedLine: (index: number) => void;
+  clearMultiSelectedLines: () => void;
+
   // ---- Unified Canvas actions ----
   setCanvasInteractionMode: (mode: EditorState["canvasInteractionMode"]) => void;
   setCanvasViewport: (viewport: Partial<EditorState["canvasViewport"]>) => void;
@@ -147,6 +173,11 @@ export interface EditorState {
   toggleLineLocked: (index: number) => void;
   toggleLineDrawer: () => void;
   toggleUnifiedInspector: () => void;
+  setCanvasActivePanel: (panelId: PanelId | null) => void;
+  toggleCanvasPanel: (panelId: PanelId) => void;
+  setCanvasPanelHeight: (height: number) => void;
+  toggleKeyframeBar: () => void;
+  setKeyframeBarHeight: (height: number) => void;
 }
 
 export const useEditorStore = create<EditorState>()((set) => ({
@@ -174,6 +205,16 @@ export const useEditorStore = create<EditorState>()((set) => ({
   eventEditorActiveLayer: -1, // -1 = flat events (non-layered)
   eventEditorDragState: null,
 
+  // ---- Beat-sync placement ----
+  beatSyncPlacement: false,
+
+  // ---- Improvisation mode ----
+  improvisationMode: false,
+  improvisationNoteKind: "tap",
+
+  // ---- Multi-line selection ----
+  multiSelectedLineIndices: [],
+
   // ---- Unified Canvas ----
   canvasInteractionMode: "idle",
   canvasViewport: { offsetX: 0, offsetY: 0, zoom: 1.0 },
@@ -181,6 +222,10 @@ export const useEditorStore = create<EditorState>()((set) => ({
   lineLocked: {},
   lineDrawerOpen: false,
   unifiedInspectorOpen: true,
+  canvasActivePanelId: null,
+  canvasPanelHeight: 250,
+  keyframeBarOpen: true,
+  keyframeBarHeight: 90,
 
   // ---- Selection ----
 
@@ -189,6 +234,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
       selectedLineIndex: index,
       selectedNoteIndices: [],
       selectedEventIndices: [],
+      multiSelectedLineIndices: [],
     }),
 
   setNoteSelection: (indices) =>
@@ -281,6 +327,26 @@ export const useEditorStore = create<EditorState>()((set) => ({
   setEventEditorActiveLayer: (layer) => set({ eventEditorActiveLayer: Math.max(-1, Math.min(4, layer)) }),
   setEventEditorDragState: (state) => set({ eventEditorDragState: state }),
 
+  // ---- Beat-sync placement ----
+  toggleBeatSyncPlacement: () => set((s) => ({ beatSyncPlacement: !s.beatSyncPlacement })),
+
+  // ---- Improvisation mode ----
+  toggleImprovisationMode: () => set((s) => ({ improvisationMode: !s.improvisationMode })),
+  setImprovisationNoteKind: (kind) => set({ improvisationNoteKind: kind }),
+
+  // ---- Multi-line selection ----
+  setMultiSelectedLines: (indices) => set({ multiSelectedLineIndices: indices }),
+  toggleMultiSelectedLine: (index) =>
+    set((state) => {
+      const existing = state.multiSelectedLineIndices;
+      const pos = existing.indexOf(index);
+      if (pos >= 0) {
+        return { multiSelectedLineIndices: existing.filter((_, i) => i !== pos) };
+      }
+      return { multiSelectedLineIndices: [...existing, index] };
+    }),
+  clearMultiSelectedLines: () => set({ multiSelectedLineIndices: [] }),
+
   // ---- Unified Canvas ----
   setCanvasInteractionMode: (mode) => set({ canvasInteractionMode: mode }),
   setCanvasViewport: (viewport) => set((s) => ({
@@ -295,4 +361,11 @@ export const useEditorStore = create<EditorState>()((set) => ({
   })),
   toggleLineDrawer: () => set((s) => ({ lineDrawerOpen: !s.lineDrawerOpen })),
   toggleUnifiedInspector: () => set((s) => ({ unifiedInspectorOpen: !s.unifiedInspectorOpen })),
+  setCanvasActivePanel: (panelId) => set({ canvasActivePanelId: panelId }),
+  toggleCanvasPanel: (panelId) => set((s) => ({
+    canvasActivePanelId: s.canvasActivePanelId === panelId ? null : panelId,
+  })),
+  setCanvasPanelHeight: (height) => set({ canvasPanelHeight: Math.max(100, Math.min(600, height)) }),
+  toggleKeyframeBar: () => set((s) => ({ keyframeBarOpen: !s.keyframeBarOpen })),
+  setKeyframeBarHeight: (height) => set({ keyframeBarHeight: Math.max(50, Math.min(200, height)) }),
 }));

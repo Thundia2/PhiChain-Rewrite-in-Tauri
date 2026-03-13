@@ -38,6 +38,11 @@ interface RpeChart {
     level?: string;
     illustrator?: string;
     offset?: number;
+    background?: string;
+    song?: string;
+    illustration?: string;
+    id?: string | number;
+    duration?: number;
   };
   judgeLineList: RpeLine[];
   judgeLineGroup?: string[];
@@ -57,6 +62,7 @@ interface RpeLine {
   anchor?: [number, number];
   rotateWithFather?: boolean;
   attachUI?: string;
+  isGif?: boolean;           // Whether texture is a GIF (v150+)
   // Extended events
   extended?: {
     scaleXEvents?: RpeEvent[];
@@ -64,6 +70,7 @@ interface RpeLine {
     colorEvents?: RpeColorEvent[];
     textEvents?: RpeTextEvent[];
     inclineEvents?: RpeEvent[];
+    gifEvents?: RpeEvent[];  // GIF playback progress events (v150+)
   };
   // Note controls
   posControl?: RpeControlEntry[];
@@ -93,6 +100,11 @@ interface RpeNote {
   isFake?: number; // 0 or 1
   alpha?: number;
   visibleTime?: number;
+  hitsound?: string;        // Custom hit sound file path (v142+)
+  judgeArea?: number;        // Judgment area width multiplier (v170)
+  tint?: [number, number, number];  // Note RGB tint (v170, newer field name)
+  color?: [number, number, number]; // Note RGB tint (v170, older field name alias)
+  tintHitEffects?: [number, number, number]; // Hit effect RGB tint (v170)
 }
 
 interface RpeEvent {
@@ -105,6 +117,7 @@ interface RpeEvent {
   easingRight?: number;
   bezier?: number;
   bezierPoints?: [number, number, number, number];
+  linkgroup?: number;        // Event link group (preserved for round-trip)
 }
 
 interface RpeColorEvent {
@@ -117,6 +130,7 @@ interface RpeColorEvent {
   easingRight?: number;
   bezier?: number;
   bezierPoints?: [number, number, number, number];
+  linkgroup?: number;
 }
 
 interface RpeTextEvent {
@@ -124,6 +138,8 @@ interface RpeTextEvent {
   endTime: [number, number, number];
   start: string;
   end: string;
+  linkgroup?: number;
+  font?: string;  // Custom font name (v152+)
 }
 
 interface RpeControlEntry {
@@ -244,6 +260,10 @@ function convertRpeEvent(rEvent: RpeEvent, kind: LineEventKind): LineEvent {
     }
   }
 
+  if (rEvent.linkgroup != null) {
+    event.linkgroup = rEvent.linkgroup;
+  }
+
   return event;
 }
 
@@ -289,17 +309,27 @@ function convertRpeColorEvent(rEvent: RpeColorEvent): LineEvent {
   if (rEvent.easingRight !== undefined && rEvent.easingRight !== 1) {
     event.easing_right = rEvent.easingRight;
   }
+  if (rEvent.linkgroup != null) {
+    event.linkgroup = rEvent.linkgroup;
+  }
 
   return event;
 }
 
 function convertRpeTextEvent(rEvent: RpeTextEvent): LineEvent {
-  return {
+  const event: LineEvent = {
     kind: "text",
     start_beat: rEvent.startTime as Beat,
     end_beat: rEvent.endTime as Beat,
     value: { text_value: rEvent.start },
   };
+  if (rEvent.linkgroup != null) {
+    event.linkgroup = rEvent.linkgroup;
+  }
+  if (rEvent.font) {
+    event.font = rEvent.font;
+  }
+  return event;
 }
 
 function convertRpeControlEntries(entries: RpeControlEntry[] | undefined): NoteControlEntry[] | undefined {
@@ -316,12 +346,11 @@ function convertRpeControlEntries(entries: RpeControlEntry[] | undefined): NoteC
 // ============================================================
 
 function convertEventLayer(layer: RpeEventLayer): EventLayer {
-  const convertEvents = (events: RpeEvent[] | undefined, kind: LineEventKind, negate = false, forceLinear = false): LineEvent[] => {
+  const convertEvents = (events: RpeEvent[] | undefined, kind: LineEventKind, negate = false): LineEvent[] => {
     if (!events) return [];
     return events.map((e) => {
       const adjusted = negate ? { ...e, start: -e.start, end: -e.end } : e;
-      const adjusted2 = forceLinear ? { ...adjusted, easingType: 1, bezier: 0 } : adjusted;
-      return convertRpeEvent(adjusted2, kind);
+      return convertRpeEvent(adjusted, kind);
     });
   };
 
@@ -330,7 +359,7 @@ function convertEventLayer(layer: RpeEventLayer): EventLayer {
     move_y_events: convertEvents(layer.moveYEvents, "y"),
     rotate_events: convertEvents(layer.rotateEvents, "rotation", true),
     alpha_events: convertEvents(layer.alphaEvents, "opacity"),
-    speed_events: convertEvents(layer.speedEvents, "speed", false, true),
+    speed_events: convertEvents(layer.speedEvents, "speed"),
   };
 }
 
@@ -348,7 +377,7 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
   }));
 
   // Convert lines
-  const lines: Line[] = rpe.judgeLineList.map((rLine, lineIdx) => {
+  const lines: Line[] = rpe.judgeLineList.map((rLine) => {
     // Convert notes with all properties
     const notes: Note[] = (rLine.notes ?? []).map((rNote) => {
       const kind = rpeNoteTypeToKind(rNote.type);
@@ -363,6 +392,10 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
         size: rNote.size != null && rNote.size !== 1 ? rNote.size : undefined,
         alpha: rNote.alpha != null && rNote.alpha !== 255 ? rNote.alpha : undefined,
         visible_time: rNote.visibleTime != null && rNote.visibleTime !== 999999 ? rNote.visibleTime : undefined,
+        hitsound: rNote.hitsound || undefined,
+        judge_area: rNote.judgeArea != null && rNote.judgeArea !== 1 ? rNote.judgeArea : undefined,
+        tint: rNote.tint ?? rNote.color ?? undefined,
+        tint_hit_effects: rNote.tintHitEffects ?? undefined,
       };
 
       if (kind === "hold") {
@@ -408,7 +441,7 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
       }
       if (layer.speedEvents) {
         for (const e of layer.speedEvents) {
-          events.push(convertRpeEvent({ ...e, easingType: 1 }, "speed"));
+          events.push(convertRpeEvent(e, "speed"));
         }
       }
     }
@@ -438,6 +471,11 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
       if (rLine.extended.inclineEvents) {
         for (const e of rLine.extended.inclineEvents) {
           events.push(convertRpeEvent(e, "incline"));
+        }
+      }
+      if (rLine.extended.gifEvents) {
+        for (const e of rLine.extended.gifEvents) {
+          events.push(convertRpeEvent(e, "gif"));
         }
       }
     }
@@ -476,8 +514,16 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
     if (rLine.Group != null) line.group = rLine.Group;
     if (rLine.Texture && rLine.Texture !== "line.png") line.texture = rLine.Texture;
     if (rLine.anchor) line.anchor = rLine.anchor;
-    if (rLine.rotateWithFather === false) line.rotate_with_father = false;
+    // rotateWithFather: pre-v163 charts should treat missing field as false
+    const rpeVersion = rpe.META?.RPEVersion ?? 0;
+    if (rLine.rotateWithFather === false) {
+      line.rotate_with_father = false;
+    } else if (rLine.rotateWithFather === undefined && rpeVersion > 0 && rpeVersion < 163) {
+      line.rotate_with_father = false;
+    }
     if (rLine.father != null && rLine.father !== -1) line.father_index = rLine.father;
+    if (rLine.attachUI) line.attach_ui = rLine.attachUI;
+    if (rLine.isGif) line.is_gif = true;
 
     // Note controls
     line.pos_control = convertRpeControlEntries(rLine.posControl);
@@ -503,6 +549,82 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
   return chart;
 }
 
+// ============================================================
+// Unknown Field Detection
+// ============================================================
+
+const KNOWN_CHART_KEYS = new Set(["BPMList", "META", "judgeLineList", "judgeLineGroup"]);
+const KNOWN_META_KEYS = new Set(["RPEVersion", "name", "composer", "charter", "level", "illustrator", "offset", "background", "song", "illustration", "id", "duration"]);
+const KNOWN_LINE_KEYS = new Set([
+  "Name", "notes", "eventLayers", "father", "zOrder", "isCover", "bpmfactor",
+  "Group", "Texture", "anchor", "rotateWithFather", "attachUI", "isGif",
+  "extended", "posControl", "alphaControl", "sizeControl", "skewControl", "yControl",
+]);
+const KNOWN_NOTE_KEYS = new Set([
+  "type", "positionX", "above", "startTime", "endTime", "speed", "size",
+  "yOffset", "isFake", "alpha", "visibleTime", "hitsound", "judgeArea",
+  "tint", "color", "tintHitEffects",
+]);
+const KNOWN_EVENT_KEYS = new Set([
+  "startTime", "endTime", "start", "end", "easingType", "easingLeft",
+  "easingRight", "bezier", "bezierPoints", "linkgroup",
+]);
+const KNOWN_TEXT_EVENT_KEYS = new Set([
+  "startTime", "endTime", "start", "end", "linkgroup", "font",
+]);
+const KNOWN_EVENT_LAYER_KEYS = new Set([
+  "moveXEvents", "moveYEvents", "rotateEvents", "alphaEvents", "speedEvents",
+]);
+const KNOWN_EXTENDED_KEYS = new Set([
+  "scaleXEvents", "scaleYEvents", "colorEvents", "textEvents", "inclineEvents", "gifEvents",
+]);
+const KNOWN_CONTROL_KEYS = new Set(["x", "easing", "value", "pos", "alpha", "size", "skew", "y"]);
+const KNOWN_BPM_KEYS = new Set(["bpm", "startTime"]);
+
+/**
+ * Walk a parsed RPE JSON and return a sorted, deduplicated list of
+ * unrecognized field paths (e.g. "note.wobble", "chart.newFeature").
+ */
+export function collectUnknownRpeFields(rpeJson: string): string[] {
+  const rpe = JSON.parse(rpeJson);
+  const unknown = new Set<string>();
+
+  function check(obj: unknown, known: Set<string>, label: string) {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const key of Object.keys(obj)) {
+      if (!known.has(key)) unknown.add(`${label}.${key}`);
+    }
+  }
+
+  check(rpe, KNOWN_CHART_KEYS, "chart");
+  if (rpe.META) check(rpe.META, KNOWN_META_KEYS, "META");
+  if (rpe.BPMList) for (const b of rpe.BPMList) check(b, KNOWN_BPM_KEYS, "BPMList[]");
+
+  for (const line of rpe.judgeLineList ?? []) {
+    check(line, KNOWN_LINE_KEYS, "line");
+    for (const note of line.notes ?? []) check(note, KNOWN_NOTE_KEYS, "note");
+    for (const layer of line.eventLayers ?? []) {
+      if (!layer) continue;
+      check(layer, KNOWN_EVENT_LAYER_KEYS, "eventLayer");
+      for (const arrKey of KNOWN_EVENT_LAYER_KEYS) {
+        for (const ev of layer[arrKey] ?? []) check(ev, KNOWN_EVENT_KEYS, "event");
+      }
+    }
+    if (line.extended) {
+      check(line.extended, KNOWN_EXTENDED_KEYS, "extended");
+      for (const ev of line.extended.textEvents ?? []) check(ev, KNOWN_TEXT_EVENT_KEYS, "textEvent");
+      for (const arrKey of ["scaleXEvents", "scaleYEvents", "colorEvents", "inclineEvents", "gifEvents"]) {
+        for (const ev of line.extended[arrKey] ?? []) check(ev, KNOWN_EVENT_KEYS, "event");
+      }
+    }
+    for (const arrKey of ["posControl", "alphaControl", "sizeControl", "skewControl", "yControl"]) {
+      for (const entry of line[arrKey] ?? []) check(entry, KNOWN_CONTROL_KEYS, "control");
+    }
+  }
+
+  return [...unknown].sort();
+}
+
 /**
  * Extract metadata from an RPE chart's META section.
  */
@@ -512,6 +634,11 @@ export function extractRpeMeta(rpeJson: string): {
   charter: string;
   level: string;
   illustrator: string;
+  rpe_background?: string;
+  rpe_song?: string;
+  rpe_illustration?: string;
+  rpe_id?: string;
+  rpe_duration?: number;
 } {
   try {
     const rpe: RpeChart = JSON.parse(rpeJson);
@@ -521,6 +648,11 @@ export function extractRpeMeta(rpeJson: string): {
       charter: rpe.META?.charter ?? "",
       level: rpe.META?.level ?? "",
       illustrator: rpe.META?.illustrator ?? "",
+      rpe_background: rpe.META?.background,
+      rpe_song: rpe.META?.song,
+      rpe_illustration: rpe.META?.illustration,
+      rpe_id: rpe.META?.id != null ? String(rpe.META.id) : undefined,
+      rpe_duration: rpe.META?.duration,
     };
   } catch {
     return { name: "", composer: "", charter: "", level: "", illustrator: "" };

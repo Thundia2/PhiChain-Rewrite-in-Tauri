@@ -13,7 +13,7 @@
 // The indicator line shows the current playback position.
 // ============================================================
 
-import type { Note, LineEvent, LineEventKind, CurveNoteTrack } from "../types/chart";
+import type { Note, LineEvent, CurveNoteTrack } from "../types/chart";
 import { CANVAS_WIDTH, beatToFloat } from "../types/chart";
 import { generateCurveNotes } from "../utils/curveNoteTrack";
 import type { DragSelectionRect, PendingNote } from "../stores/editorStore";
@@ -163,16 +163,16 @@ export class TimelineRenderer {
     this.drawLaneGuides(ctx, lanes, noteAreaLeft, noteAreaWidth, canvasHeight);
 
     // ---- Notes ----
-    const filteredNotes = notes.map((note, idx) => ({ note, idx })).filter(({ note }) => {
-      if (noteSideFilter === "above") return note.above;
-      if (noteSideFilter === "below") return !note.above;
-      return true;
-    });
+    const selectedSet = new Set(selectedNoteIndices);
 
-    for (const { note, idx } of filteredNotes) {
+    for (let idx = 0; idx < notes.length; idx++) {
+      const note = notes[idx];
+      if (noteSideFilter === "above" && !note.above) continue;
+      if (noteSideFilter === "below" && note.above) continue;
+
       const beat = beatToFloat(note.beat);
       if (beat < minBeat - 2 || beat > maxBeat + 2) continue;
-      const isSelected = selectedNoteIndices.includes(idx);
+      const isSelected = selectedSet.has(idx);
       this.drawNote(ctx, note, beat, isSelected, scrollBeat, zoom, noteAreaLeft, noteAreaWidth, canvasHeight);
     }
 
@@ -261,7 +261,7 @@ export class TimelineRenderer {
     scrollBeat: number,
     canvasWidth: number, canvasHeight: number,
   ) {
-    const step = 1 / density;
+    const step = density > 0 ? 1 / density : 1;
     const startBeat = Math.floor(minBeat * density) / density;
 
     for (let b = startBeat; b <= maxBeat + step; b += step) {

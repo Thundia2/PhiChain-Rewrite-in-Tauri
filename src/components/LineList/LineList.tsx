@@ -3,6 +3,7 @@ import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { useTabStore } from "../../stores/tabStore";
+import { useGroupStore } from "../../stores/groupStore";
 import { evaluateLineEventsWithLayers, getFirstAppearanceBeat } from "../../canvas/events";
 import { BpmList } from "../../utils/bpmList";
 import type { LineSortMode } from "../../types/editor";
@@ -47,6 +48,7 @@ export function LineList() {
   const lineSortMode = useEditorStore((s) => s.lineSortMode);
   const setLineSortMode = useEditorStore((s) => s.setLineSortMode);
   const openLineEventEditor = useTabStore((s) => s.openLineEventEditor);
+  const groups = useGroupStore((s) => s.groups);
   const currentBeat = useThrottledBeat();
 
   // Pre-compute line states for active_first mode (avoid double evaluation)
@@ -195,7 +197,16 @@ export function LineList() {
                       style={{ backgroundColor: isSelected ? "var(--accent-primary)" : "var(--text-muted)" }}
                     />
                   )}
-                  <span className="flex-1 truncate">{line.name || `Line ${idx + 1}`}</span>
+                  <span className="flex-1 truncate" style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                    {groups.filter((g) => g.type === "line" && g.lines.some((l: { lineIndex: number }) => l.lineIndex === idx)).map((g) => (
+                      <span
+                        key={g.id}
+                        style={{ width: 5, height: 5, borderRadius: "50%", background: g.color, flexShrink: 0 }}
+                        title={`Group: ${g.name}`}
+                      />
+                    ))}
+                    {line.texture ? "\u{1F5BC} " : ""}{line.name || `Line ${idx + 1}`}
+                  </span>
                   <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>
                     {line.notes.length}N {line.events.length}E
                   </span>

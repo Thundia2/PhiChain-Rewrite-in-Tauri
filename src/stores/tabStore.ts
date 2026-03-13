@@ -1,19 +1,18 @@
 // ============================================================
 // Tab Store — Zustand
 //
-// Manages browser-like tabs: Home, Chart(s), Settings, Line Event Editor.
+// Manages browser-like tabs: Home, Chart(s), Line Event Editor, Panels.
 // Home tab is always present and not closable.
 //
 // Usage:
 //   const tabs = useTabStore(s => s.tabs);
 //   const activeTabId = useTabStore(s => s.activeTabId);
-//   const openSettings = useTabStore(s => s.openSettings);
 // ============================================================
 
 import { create } from "zustand";
 import { useSettingsStore } from "./settingsStore";
 
-export type TabType = "home" | "chart" | "settings" | "line_event_editor" | "panel" | "unified_editor";
+export type TabType = "home" | "chart" | "line_event_editor" | "panel" | "unified_editor";
 
 export interface Tab {
   id: string;
@@ -33,7 +32,6 @@ export interface TabState {
   updateTabLabel: (tabId: string, label: string) => void;
 
   // Convenience
-  openSettings: () => void;
   openChart: (chartId: string, label: string) => void;
   openLineEventEditor: (lineIndex: number, lineName: string) => void;
   openPanel: (panelId: string, label: string) => void;
@@ -80,10 +78,6 @@ export const useTabStore = create<TabState>()((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, label } : t)),
     }));
-  },
-
-  openSettings: () => {
-    get().openTab({ id: "settings", type: "settings", label: "Settings", closable: true });
   },
 
   openChart: (chartId, label) => {

@@ -20,7 +20,7 @@ import { useAudioStore } from "../../stores/audioStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { TimelineRenderer, BASE_PX_PER_BEAT } from "../../canvas/timelineRenderer";
 import { BpmList } from "../../utils/bpmList";
-import { beatToFloat, CANVAS_WIDTH } from "../../types/chart";
+import { beatToFloat } from "../../types/chart";
 import { snapBeat } from "../../utils/beat";
 import type { NoteKind } from "../../types/chart";
 import type { EditorTool } from "../../types/editor";
@@ -50,20 +50,18 @@ export function Timeline() {
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
 
-  // Hold resize refs
-  const isResizingRef = useRef(false);
-
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; noteIdx: number } | null>(null);
 
-  // Store subscriptions for reactive rendering
+  // Store subscriptions for reactive rendering — values read via getState() in callbacks
   const chart = useChartStore((s) => s.chart);
   const selectedLineIndex = useEditorStore((s) => s.selectedLineIndex);
-  const zoom = useEditorStore((s) => s.timelineZoom);
-  const density = useEditorStore((s) => s.density);
-  const lanes = useEditorStore((s) => s.lanes);
-  const noteSideFilter = useEditorStore((s) => s.noteSideFilter);
-  const selectedNoteIndices = useEditorStore((s) => s.selectedNoteIndices);
+  // Subscribe to trigger re-renders when these change (used in render loop via getState)
+  void useEditorStore((s) => s.timelineZoom);
+  void useEditorStore((s) => s.density);
+  void useEditorStore((s) => s.lanes);
+  void useEditorStore((s) => s.noteSideFilter);
+  void useEditorStore((s) => s.selectedNoteIndices);
   const audioDuration = useAudioStore((s) => s.duration);
 
   const maxBeat = useMemo(() => {
@@ -400,7 +398,6 @@ export function Timeline() {
     const line = es.selectedLineIndex !== null ? cs.chart.lines[es.selectedLineIndex] : null;
     if (!line || es.selectedLineIndex === null) return;
 
-    const clickBeat = TimelineRenderer.yToBeat(y, scrollBeatRef.current, es.timelineZoom, rect.height);
     const { noteAreaLeft, noteAreaWidth } = TimelineRenderer.getNoteAreaBounds(rect.width);
 
     // Find nearest note
@@ -440,9 +437,12 @@ export function Timeline() {
     const cs = useChartStore.getState();
     if (!es.curveTrackCreation || es.selectedLineIndex === null) return;
 
+    const line = cs.chart.lines[es.selectedLineIndex];
+    const fromNote = line?.notes[es.curveTrackCreation.fromNoteIndex];
+    const toNote = line?.notes[contextMenu.noteIdx];
     cs.addCurveNoteTrack(es.selectedLineIndex, {
-      from: es.curveTrackCreation.fromNoteIndex,
-      to: contextMenu.noteIdx,
+      from: fromNote?.uid ?? String(es.curveTrackCreation.fromNoteIndex),
+      to: toNote?.uid ?? String(contextMenu.noteIdx),
       options: { density: 4, kind: "drag", curve: "linear" },
     });
     es.setCurveTrackCreation(null);

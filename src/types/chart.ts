@@ -80,6 +80,8 @@ export type NoteKind =
   | "hold";  // Hold down for a duration
 
 export interface Note {
+  /** Stable unique identifier for group membership references */
+  uid?: string;
   /** What type of note this is */
   kind: NoteKind;
   /** Whether the note falls from above the line (true) or below (false) */
@@ -102,6 +104,14 @@ export interface Note {
   alpha?: number;
   /** Seconds before hit time when note becomes visible (default 999999 = always) */
   visible_time?: number;
+  /** Custom hit sound file path relative to chart root (RPE v142+) */
+  hitsound?: string;
+  /** Judgment area width multiplier (default 1.0, RPE v170) */
+  judge_area?: number;
+  /** Note RGB tint [R, G, B] 0-255 (RPE v170, field name "tint" or "color") */
+  tint?: [number, number, number];
+  /** Hit effect RGB tint [R, G, B] 0-255 (RPE v170) */
+  tint_hit_effects?: [number, number, number];
 }
 
 // ------ Line Events ------
@@ -119,7 +129,8 @@ export type LineEventKind =
   | "scale_y"  // Vertical scale of the judgment line (default 1.0)
   | "color"    // RGB color tint of the line
   | "text"     // Text displayed on the line
-  | "incline"; // Tilt/incline effect
+  | "incline"  // Tilt/incline effect
+  | "gif";     // GIF playback progress (0.0-1.0, RPE v150+)
 
 // The 30+ easing types supported by phichain.
 // See https://easings.net/ for visual reference.
@@ -156,6 +167,10 @@ export interface LineEvent {
   easing_left?: number;
   /** Easing sub-range end (0.0-1.0, default 1.0) — clips easing curve */
   easing_right?: number;
+  /** RPE linkgroup — links events together for editing (preserved for round-trip) */
+  linkgroup?: number;
+  /** Custom font for text events (RPE v152+) */
+  font?: string;
 }
 
 // ------ Event Layers ------
@@ -216,6 +231,10 @@ export interface Line {
   size_control?: NoteControlEntry[];
   skew_control?: NoteControlEntry[];
   y_control?: NoteControlEntry[];
+  /** UI element binding (RPE: pause/combonumber/combo/score/bar/name/level) */
+  attach_ui?: string;
+  /** Whether the line texture is a GIF (RPE v150+) */
+  is_gif?: boolean;
 }
 
 // ------ BPM List ------
@@ -238,12 +257,38 @@ export interface PhichainChart {
 
 // ------ Project Metadata ------
 // Song info displayed in the game UI.
+// Extended fields match Phira's info.yml ChartInfo specification.
 export interface ProjectMeta {
   composer: string;
   charter: string;
   illustrator: string;
   name: string;
   level: string;
+  // ---- Phira info.yml extended fields ----
+  /** Music preview start time in seconds (default 0) */
+  preview_start?: number;
+  /** Music preview end time in seconds (default: preview_start + 15) */
+  preview_end?: number;
+  /** Chart display aspect ratio (default 16/9) */
+  aspect_ratio?: number;
+  /** Background dim level 0-1 (default 0.6) */
+  background_dim?: number;
+  /** Judgment line length (default 6.0) */
+  line_length?: number;
+  /** Chart tip/hint text shown on loading screen */
+  tip?: string;
+  /** Tags for categorization and search */
+  tags?: string[];
+  /** Chart introduction text */
+  intro?: string;
+  /** Hold mask position: true = mask at tail, false = mask at head (default false) */
+  hold_partial_cover?: boolean;
+  // ---- RPE round-trip fields (not displayed in UI) ----
+  rpe_background?: string;
+  rpe_song?: string;
+  rpe_illustration?: string;
+  rpe_id?: string;
+  rpe_duration?: number;
 }
 
 // ------ Project Data (from Tauri backend) ------
