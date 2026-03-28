@@ -10,10 +10,11 @@ import { useEditorStore } from "../stores/editorStore";
 import { useChartStore } from "../stores/chartStore";
 import { useAudioStore } from "../stores/audioStore";
 import { useGroupStore } from "../stores/groupStore";
+import { useBookmarkStore } from "../stores/bookmarkStore";
 import { audioEngine } from "../audio/audioEngine";
-import { CANVAS_WIDTH, floatToBeat } from "../types/chart";
-import type { Note, NoteKind } from "../types/chart";
-import { addBeats, subtractBeats, minimumBeat } from "../utils/beat";
+import { CANVAS_WIDTH } from "../types/chart";
+import type { BookmarkPreset } from "../types/bookmark";
+import { addBeats, subtractBeats, minimumBeat, snapBeat } from "../utils/beat";
 import { BpmList } from "../utils/bpmList";
 import type { EditorTool } from "../types/editor";
 import { useToastStore } from "../stores/toastStore";
@@ -27,16 +28,48 @@ export function useGlobalHotkeys(callbacks: {
   const setTool = (tool: EditorTool) => () => useEditorStore.getState().setTool(tool);
 
   useHotkeys("v", setTool("select"), { preventDefault: true });
-  useHotkeys("q", setTool("place_tap"), { preventDefault: true });
-  useHotkeys("w", setTool("place_drag"), { preventDefault: true });
-  useHotkeys("e", setTool("place_flick"), { preventDefault: true });
-  useHotkeys("r", setTool("place_hold"), { preventDefault: true });
   useHotkeys("x", setTool("eraser"), { preventDefault: true });
+
+  // Q/W/E/R: place markers in mark mode, switch tools otherwise
+  useHotkeys("q", () => {
+    if (useEditorStore.getState().improvisationMode) { improvPlace("tap"); return; }
+    useEditorStore.getState().setTool("place_tap");
+  }, { preventDefault: true });
+  useHotkeys("w", () => {
+    if (useEditorStore.getState().improvisationMode) { improvPlace("drag"); return; }
+    useEditorStore.getState().setTool("place_drag");
+  }, { preventDefault: true });
+  useHotkeys("e", () => {
+    if (useEditorStore.getState().improvisationMode) { improvPlace("flick"); return; }
+    useEditorStore.getState().setTool("place_flick");
+  }, { preventDefault: true });
+  useHotkeys("r", () => {
+    if (useEditorStore.getState().improvisationMode) { improvPlace("hold"); return; }
+    useEditorStore.getState().setTool("place_hold");
+  }, { preventDefault: true });
 
   // ---- Unified Editor panels ----
   useHotkeys("l", () => useEditorStore.getState().toggleLineDrawer(), { preventDefault: true });
   useHotkeys("i", () => useEditorStore.getState().toggleUnifiedInspector(), { preventDefault: true });
   useHotkeys("k", () => useEditorStore.getState().toggleKeyframeBar(), { preventDefault: true });
+  useHotkeys("shift+k", () => useEditorStore.getState().toggleCurveEditorExpanded(), { preventDefault: true });
+  useHotkeys("ctrl+shift+k, meta+shift+k", () => {
+    const es = useEditorStore.getState();
+    if (es.curveEditorExpanded) {
+      es.setCurveEditorPoppedOut(!es.curveEditorPoppedOut);
+    }
+  }, { preventDefault: true });
+
+  // ---- Quick panel hotkeys ----
+  useHotkeys("alt+1", () => useEditorStore.getState().toggleCanvasPanel("timeline"), { preventDefault: true });
+  useHotkeys("alt+2", () => useEditorStore.getState().toggleCanvasPanel("line-list"), { preventDefault: true });
+  useHotkeys("alt+3", () => useEditorStore.getState().toggleCanvasPanel("effects"), { preventDefault: true });
+
+  // ---- LineStrip search ----
+  useHotkeys("ctrl+l, meta+l", () => useEditorStore.getState().toggleLineStripSearch(), { preventDefault: true });
+
+  // ---- Record mode ----
+  useHotkeys("alt+r", () => useEditorStore.getState().toggleRecordMode(), { preventDefault: true });
 
   // ---- Undo / Redo ----
   useHotkeys("ctrl+z, meta+z", () => useChartStore.getState().undo(), { preventDefault: true });
@@ -54,6 +87,24 @@ export function useGlobalHotkeys(callbacks: {
     } else if (es.selectedEventIndices.length > 0) {
       cs.removeEvents(es.selectedLineIndex, es.selectedEventIndices);
       es.clearSelection();
+    } else if (es.multiSelectedLineIndices.length > 0) {
+      // Delete multi-selected lines (in reverse order to preserve indices)
+      const sorted = [...es.multiSelectedLineIndices].sort((a, b) => b - a);
+      for (const idx of sorted) {
+        cs.removeLine(idx);
+      }
+      es.clearMultiSelectedLines();
+      es.selectLine(null);
+    } else if (cs.chart.lines.length > 0) {
+      // Delete the currently selected line
+      cs.removeLine(es.selectedLineIndex);
+      // Select an adjacent line, or deselect if none left
+      const remaining = cs.chart.lines.length; // already removed
+      if (remaining === 0) {
+        es.selectLine(null);
+      } else {
+        es.selectLine(Math.min(es.selectedLineIndex, remaining - 1));
+      }
     }
   }, { preventDefault: true });
 
@@ -230,8 +281,14 @@ export function useGlobalHotkeys(callbacks: {
 
   // ---- Group editing ----
 
-  // Ctrl+G: Create group from currently selected lines or notes
+  // Ctrl+G: Toggle pattern tool
   useHotkeys("ctrl+g, meta+g", () => {
+    const es = useEditorStore.getState();
+    es.setTool(es.activeTool === "place_pattern" ? "select" : "place_pattern");
+  }, { preventDefault: true });
+
+  // Ctrl+Shift+G: Create group from currently selected lines or notes
+  useHotkeys("ctrl+shift+g, meta+shift+g", () => {
     const es = useEditorStore.getState();
     const cs = useChartStore.getState();
     const gs = useGroupStore.getState();
@@ -307,14 +364,13 @@ export function useGlobalHotkeys(callbacks: {
     }
   }, { preventDefault: true, enableOnFormTags: false });
 
-  // ---- Improvisation mode toggle ----
+  // ---- Mark mode toggle ----
   useHotkeys("shift+i", () => {
     useEditorStore.getState().toggleImprovisationMode();
   }, { preventDefault: true });
 
-  // ---- Improvisation mode: place notes during playback ----
-  // Keys: 1=tap, 2=drag, 3=flick, 4=hold (above), shift+1/2/3/4 (below)
-  const improvisingPlace = (kind: NoteKind, above: boolean) => {
+  // ---- Mark mode: place colored bookmarks during playback ----
+  const improvPlace = (preset: BookmarkPreset) => {
     const es = useEditorStore.getState();
     const as_ = useAudioStore.getState();
     const cs = useChartStore.getState();
@@ -323,26 +379,25 @@ export function useGlobalHotkeys(callbacks: {
     if (es.selectedLineIndex === null) return;
 
     const bpmList = new BpmList(cs.chart.bpm_list);
-    const currentBeat = bpmList.beatAtFloat(as_.currentTime - cs.chart.offset);
-    const beat = floatToBeat(currentBeat);
+    const bs = useBookmarkStore.getState();
 
-    const newNote: Note = {
-      kind,
-      above,
-      beat,
-      x: 0, // Center of line
-      speed: 1,
-    };
+    // Latency compensation: shift time back so the marker lands
+    // where the sound was, not where the playhead is when your finger hits the key
+    const compensatedTime = as_.currentTime + (bs.latencyOffset / 1000);
+    const currentBeat = bpmList.beatAtFloat(compensatedTime - cs.chart.offset);
+    const beat = snapBeat(currentBeat, es.density);
 
-    cs.addNote(es.selectedLineIndex, newNote);
+    bs.addBookmark(beat, 0, true, es.selectedLineIndex, preset);
   };
 
-  useHotkeys("1", () => improvisingPlace("tap", true), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("2", () => improvisingPlace("drag", true), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("3", () => improvisingPlace("flick", true), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("4", () => improvisingPlace("hold", true), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("shift+1", () => improvisingPlace("tap", false), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("shift+2", () => improvisingPlace("drag", false), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("shift+3", () => improvisingPlace("flick", false), { preventDefault: false, enableOnFormTags: false });
-  useHotkeys("shift+4", () => improvisingPlace("hold", false), { preventDefault: false, enableOnFormTags: false });
+  // Misc markers (1-3) — only fire in mark mode
+  useHotkeys("1", () => {
+    if (useEditorStore.getState().improvisationMode) improvPlace("orange");
+  }, { preventDefault: false, enableOnFormTags: false });
+  useHotkeys("2", () => {
+    if (useEditorStore.getState().improvisationMode) improvPlace("green");
+  }, { preventDefault: false, enableOnFormTags: false });
+  useHotkeys("3", () => {
+    if (useEditorStore.getState().improvisationMode) improvPlace("violet");
+  }, { preventDefault: false, enableOnFormTags: false });
 }

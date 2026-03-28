@@ -144,6 +144,7 @@ export interface ChartState {
 
   // ---- Line mutations ----
   addLine: (line?: Partial<Line>) => void;
+  batchAddLines: (partials: Partial<Line>[]) => void;
   removeLine: (lineIndex: number) => void;
   duplicateLine: (lineIndex: number) => void;
   editLine: (lineIndex: number, changes: Partial<Line>) => void;
@@ -156,6 +157,7 @@ export interface ChartState {
   editNotes: (lineIndex: number, noteIndices: number[], changes: Partial<Note>) => void;
 
   // ---- Batch note/event mutations (single undo entry) ----
+  batchAddNotes: (lineIndex: number, notes: Note[]) => void;
   batchEditNotes: (lineIndex: number, edits: Array<{ noteIndex: number; changes: Partial<Note> }>) => void;
   batchEditEvents: (lineIndex: number, edits: Array<{ eventIndex: number; changes: Partial<LineEvent> }>) => void;
 
@@ -311,6 +313,18 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       }),
     ),
 
+  batchAddLines: (partials) =>
+    set(
+      produce((state: ChartState) => {
+        if (partials.length === 0) return;
+        pushHistory(state);
+        for (const partial of partials) {
+          const line = { ...createDefaultLine(undefined, state.chart.lines.length), ...partial };
+          state.chart.lines.push(line);
+        }
+      }),
+    ),
+
   removeLine: (lineIndex) =>
     set(
       produce((state: ChartState) => {
@@ -412,6 +426,19 @@ export const useChartStore = create<ChartState>()((set, get) => ({
     ),
 
   // ---- Batch note/event mutations ----
+
+  batchAddNotes: (lineIndex, notes) =>
+    set(
+      produce((state: ChartState) => {
+        if (lineIndex < 0 || lineIndex >= state.chart.lines.length) return;
+        if (notes.length === 0) return;
+        pushHistory(state);
+        for (const note of notes) {
+          state.chart.lines[lineIndex].notes.push(note);
+        }
+        sortNotes(state.chart.lines[lineIndex].notes);
+      }),
+    ),
 
   batchEditNotes: (lineIndex, edits) =>
     set(

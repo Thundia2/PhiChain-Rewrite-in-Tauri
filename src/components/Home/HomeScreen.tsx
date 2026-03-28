@@ -15,6 +15,12 @@ import { useTabStore } from "../../stores/tabStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { audioEngine } from "../../audio/audioEngine";
 import { useToastStore } from "../../stores/toastStore";
+import {
+  saveSession,
+  registerSession,
+  setSkipNextSave,
+  setSkipNextRestore,
+} from "../../utils/chartSessions";
 import { EditorGuideModal } from "./EditorGuideModal";
 
 interface HomeScreenProps {
@@ -94,6 +100,46 @@ function Kbd({ children }: { children: React.ReactNode }) {
 
 async function handleOpenRecent(project: RecentProject) {
   try {
+    // Save the current chart's session before replacing it (safety measure)
+    const tabState = useTabStore.getState();
+    const currentTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
+    if (
+      currentTab &&
+      (currentTab.type === "chart" || currentTab.type === "unified_editor") &&
+      useChartStore.getState().isLoaded
+    ) {
+      saveSession(currentTab.id);
+    }
+    setSkipNextSave();
+
+    // Tauri project with a folder on disk — reload via IPC
+    if (project.projectPath) {
+      const { loadProject, readAudioFileAsUrl, readImageFileAsUrl } = await import("../../utils/ipc");
+      const projectData = await loadProject(project.projectPath);
+
+      const cs = useChartStore.getState();
+      cs.loadFromProjectData(projectData);
+
+      if (projectData.music_path) {
+        const url = await readAudioFileAsUrl(projectData.music_path);
+        const ext = projectData.music_path.split(".").pop()?.toLowerCase() ?? "mp3";
+        await audioEngine.load(url, ext);
+        useAudioStore.getState().setMusicLoaded(true);
+      }
+
+      if (projectData.illustration_path) {
+        const illustUrl = await readImageFileAsUrl(projectData.illustration_path);
+        await cs.loadIllustration(illustUrl);
+      }
+
+      useEditorStore.getState().selectLine(0);
+      useTabStore.getState().openChart(project.projectPath, project.name || "Untitled");
+      setSkipNextRestore();
+      registerSession(useTabStore.getState().getChartTabId(project.projectPath));
+      return;
+    }
+
+    // Browser / in-memory project — load from IndexedDB
     const stored = await loadStoredProject(project.id);
     if (!stored) {
       useToastStore.getState().addToast({
@@ -114,14 +160,18 @@ async function handleOpenRecent(project: RecentProject) {
     });
 
     if (stored.audioBlob && stored.audioExt) {
-      const blob = new Blob([stored.audioBlob]);
+      const mimeTypes: Record<string, string> = { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav", flac: "audio/flac", m4a: "audio/mp4" };
+      const blob = new Blob([stored.audioBlob], { type: mimeTypes[stored.audioExt] ?? "audio/mpeg" });
       const url = URL.createObjectURL(blob);
       await audioEngine.load(url, stored.audioExt);
       useAudioStore.getState().setMusicLoaded(true);
     }
 
     useEditorStore.getState().selectLine(0);
-    useTabStore.getState().openChart("recent-" + project.id, project.name || "Untitled");
+    const chartId = "recent-" + project.id;
+    useTabStore.getState().openChart(chartId, project.name || "Untitled");
+    setSkipNextRestore();
+    registerSession(useTabStore.getState().getChartTabId(chartId));
   } catch (err) {
     console.error("Failed to open recent project:", err);
     useToastStore.getState().addToast({
@@ -139,8 +189,10 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
   return (
     <div
       className="h-full"
-      style={{ backgroundColor: "var(--bg-primary)", display: "flex" }}
+      style={{ backgroundColor: "var(--bg-primary)", display: "flex", justifyContent: "center" }}
     >
+      {/* ── Centered wrapper ── */}
+      <div style={{ display: "flex", maxWidth: 900, width: "100%" }}>
       {/* ── Left: Main content ── */}
       <div
         style={{
@@ -503,6 +555,7 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
         </div>
       </div>
 
+      </div>
       <EditorGuideModal open={showGuide} onClose={() => setShowGuide(false)} />
     </div>
   );

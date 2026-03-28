@@ -11,9 +11,9 @@ import { useGroupStore } from "../../stores/groupStore";
 
 const toggleBtnStyle: React.CSSProperties = {
   background: "none",
-  border: "1px solid #333",
-  borderRadius: 3,
-  color: "#666",
+  border: "1px solid var(--border-color)",
+  borderRadius: 6,
+  color: "var(--text-muted)",
   cursor: "pointer",
   fontSize: 9,
   padding: "1px 6px",
@@ -41,9 +41,9 @@ export function StatusBar() {
         padding: "0 10px",
         gap: 16,
         background: "var(--bg-primary)",
-        borderTop: "1px solid #222",
+        borderTop: "1px solid var(--border-color)",
         fontSize: 9,
-        color: "#555",
+        color: "var(--text-muted)",
         flexShrink: 0,
       }}
     >
@@ -51,7 +51,12 @@ export function StatusBar() {
       <span>Notes: {totalNotes}</span>
       <span>Events: {totalEvents}</span>
       {improvisationMode && (
-        <span style={{ color: "#ff6b6b", fontWeight: "bold" }}>IMPROV MODE (1-4 to place)</span>
+        <>
+          <span style={{ color: "var(--error)", fontWeight: "bold" }}>MARK MODE</span>
+          <span style={{ color: "var(--text-secondary)", marginLeft: 4 }}>
+            Q=Tap  W=Drag  E=Flick  R=Hold  1-3=Misc
+          </span>
+        </>
       )}
       {activeGroup && (
         <span style={{ color: activeGroup.color, fontWeight: "bold" }}>

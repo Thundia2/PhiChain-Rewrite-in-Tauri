@@ -56,7 +56,7 @@ export function LineEventEditor({ lineIndex }: LineEventEditorProps) {
         <div
           className="flex flex-col border-l"
           style={{
-            borderColor: "var(--border-primary)",
+            borderColor: "var(--border-color)",
             width: "240px",
             minWidth: "200px",
           }}
@@ -70,7 +70,7 @@ export function LineEventEditor({ lineIndex }: LineEventEditorProps) {
           <div
             className="border-t"
             style={{
-              borderColor: "var(--border-primary)",
+              borderColor: "var(--border-color)",
               height: "200px",
               minHeight: "150px",
             }}

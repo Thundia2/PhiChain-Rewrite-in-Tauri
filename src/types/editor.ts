@@ -13,7 +13,8 @@ export type EditorTool =
   | "place_drag"          // Click to place a Drag note
   | "place_flick"         // Click to place a Flick note
   | "place_hold"          // Click to start a Hold, click again to end
-  | "eraser";             // Click to delete notes/events
+  | "eraser"              // Click to delete notes/events
+  | "place_pattern";      // Click-drag to generate note patterns
 
 /** Which side of the line to show notes for in the timeline */
 export type NoteSideFilter = "all" | "above" | "below";
@@ -35,7 +36,28 @@ export type PanelId =
   | "validation"
   | "effects"
   | "textures"
-  | "group-manager";
+  | "group-manager"
+  | "presets";
+
+/** Panel access tier for the unified editor */
+export type PanelTier = "always" | "quick" | "on_demand";
+
+export const PANEL_TIERS: Record<PanelId, PanelTier> = {
+  "inspector": "always",
+  "toolbar": "always",
+  "timeline": "quick",
+  "line-list": "quick",
+  "effects": "quick",
+  "textures": "on_demand",
+  "group-manager": "on_demand",
+  "bpm-list": "on_demand",
+  "chart-settings": "on_demand",
+  "timeline-settings": "on_demand",
+  "validation": "on_demand",
+  "game-preview": "on_demand",
+  "hotkey-reference": "on_demand",
+  "presets": "on_demand",
+};
 
 /** Keyboard shortcut definition */
 export interface HotkeyBinding {

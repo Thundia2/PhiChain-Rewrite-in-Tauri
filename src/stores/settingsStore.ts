@@ -44,8 +44,34 @@ export interface SettingsState {
   autosaveEnabled: boolean;
   autosaveIntervalSeconds: number;
 
+  // ---- Quick Event Creation ----
+  quickTransitionDuration: number;
+  quickTransitionEasing: string;
+
+  // ---- Record Mode ----
+  recordSnapToDensity: boolean;
+  recordSimplificationDefault: number;
+
+  // ---- Text Events ----
+  defaultTextDurationBeats: number;
+
+  // ---- Line path preview ----
+  showLinePath: boolean;
+  linePathBeatsAhead: number;
+  linePathBeatsBehind: number;
+  linePathSampleInterval: number;
+
+  // ---- Colors ----
+  recentColors: [number, number, number][];
+
+  // ---- Easing ----
+  recentEasings: string[];
+  favoriteEasings: string[];
+
   // ---- Actions ----
   updateSettings: (changes: Partial<SettingsData>) => void;
+  recordEasingUse: (easing: string) => void;
+  toggleFavoriteEasing: (easing: string) => void;
   loadSettings: () => Promise<void>;
   saveSettings: () => Promise<void>;
 }
@@ -73,6 +99,18 @@ const DEFAULTS: SettingsData = {
   defaultEditorView: "unified" as const,
   autosaveEnabled: true,
   autosaveIntervalSeconds: 120,
+  quickTransitionDuration: 4,
+  quickTransitionEasing: "ease_out_sine",
+  recordSnapToDensity: true,
+  recordSimplificationDefault: 5,
+  defaultTextDurationBeats: 2,
+  showLinePath: false,
+  linePathBeatsAhead: 8,
+  linePathBeatsBehind: 4,
+  linePathSampleInterval: 0.5,
+  recentColors: [],
+  recentEasings: [],
+  favoriteEasings: ["linear", "ease_out_sine", "ease_out_cubic"],
 };
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -81,6 +119,24 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   updateSettings: (changes) => {
     set(changes);
     // Auto-save after update
+    get().saveSettings();
+  },
+
+  recordEasingUse: (easing) => {
+    set((s) => {
+      const recent = [easing, ...s.recentEasings.filter((e) => e !== easing)].slice(0, 8);
+      return { recentEasings: recent };
+    });
+    get().saveSettings();
+  },
+
+  toggleFavoriteEasing: (easing) => {
+    set((s) => {
+      const favs = s.favoriteEasings.includes(easing)
+        ? s.favoriteEasings.filter((e) => e !== easing)
+        : [...s.favoriteEasings, easing];
+      return { favoriteEasings: favs };
+    });
     get().saveSettings();
   },
 
@@ -126,6 +182,18 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         defaultEditorView: state.defaultEditorView,
         autosaveEnabled: state.autosaveEnabled,
         autosaveIntervalSeconds: state.autosaveIntervalSeconds,
+        quickTransitionDuration: state.quickTransitionDuration,
+        quickTransitionEasing: state.quickTransitionEasing,
+        recordSnapToDensity: state.recordSnapToDensity,
+        recordSimplificationDefault: state.recordSimplificationDefault,
+        defaultTextDurationBeats: state.defaultTextDurationBeats,
+        showLinePath: state.showLinePath,
+        linePathBeatsAhead: state.linePathBeatsAhead,
+        linePathBeatsBehind: state.linePathBeatsBehind,
+        linePathSampleInterval: state.linePathSampleInterval,
+        recentColors: state.recentColors,
+        recentEasings: state.recentEasings,
+        favoriteEasings: state.favoriteEasings,
       };
       await writeJson("settings.json", data);
     } catch {

@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useMenus } from "../../hooks/useMenus";
 import type { Menu } from "../../hooks/useMenus";
+import { BUILTIN_PRESETS } from "../../presets/builtinPresets";
+import { applyPresetAtPlayhead } from "../../utils/applyPreset";
+import { useEditorStore } from "../../stores/editorStore";
 
 interface CommandItem {
   id: string;
@@ -57,7 +60,21 @@ export function CommandPalette({
   onClose: () => void;
 }) {
   const menus = useMenus();
-  const allCommands = useMemo(() => flattenMenus(menus), [menus]);
+  const presetCommands = useMemo((): CommandItem[] => {
+    return BUILTIN_PRESETS.map((preset) => ({
+      id: `preset:${preset.id}`,
+      label: preset.name,
+      section: "Event Presets",
+      shortcut: undefined,
+      action: () => {
+        const es = useEditorStore.getState();
+        if (es.selectedLineIndex === null) return;
+        applyPresetAtPlayhead(es.selectedLineIndex, preset);
+      },
+      disabled: useEditorStore.getState().selectedLineIndex === null,
+    }));
+  }, []);
+  const allCommands = useMemo(() => [...flattenMenus(menus), ...presetCommands], [menus, presetCommands]);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);

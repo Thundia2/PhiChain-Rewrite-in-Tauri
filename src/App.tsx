@@ -10,6 +10,7 @@ import type { MosaicNode } from "react-mosaic-component";
 import "react-mosaic-component/react-mosaic-component.css";
 
 import type { PanelId } from "./types/editor";
+import { PANEL_TIERS } from "./types/editor";
 import { useChartStore } from "./stores/chartStore";
 import { useTabStore } from "./stores/tabStore";
 import {
@@ -17,6 +18,7 @@ import {
   restoreSession,
   deleteSession,
   shouldSkipSave,
+  shouldSkipRestore,
 } from "./utils/chartSessions";
 
 import { MenuBar } from "./components/MenuBar/MenuBar";
@@ -42,7 +44,12 @@ import { LineEventEditor } from "./components/LineEventEditor/LineEventEditor";
 import { UnifiedEditorTab } from "./components/UnifiedCanvas/UnifiedEditorTab";
 import { ValidationPanel } from "./components/Validation/ValidationPanel";
 import { EffectsEditor } from "./components/EffectsEditor/EffectsEditor";
+import { PresetPanel } from "./components/PresetPanel/PresetPanel";
 import { ParametricDialog } from "./components/ParametricDialog/ParametricDialog";
+import { NotePatternDialog } from "./components/NotePatternDialog/NotePatternDialog";
+import { SpinGeneratorDialog } from "./components/SpinGeneratorDialog/SpinGeneratorDialog";
+import { BatchLineDialog } from "./components/BatchLineDialog/BatchLineDialog";
+import { LyricsSyncDialog } from "./components/LyricsSyncDialog/LyricsSyncDialog";
 import { useEditorStore } from "./stores/editorStore";
 import { useGlobalHotkeys } from "./hooks/useHotkeys";
 import { useClipboard } from "./hooks/useClipboard";
@@ -97,6 +104,7 @@ const PANEL_TITLES: Record<PanelId, string> = {
   "effects": "Effects",
   "textures": "Textures",
   "group-manager": "Group Manager",
+  "presets": "Presets",
 };
 
 function renderPanel(id: PanelId) {
@@ -121,6 +129,8 @@ function renderPanel(id: PanelId) {
       return <ValidationPanel />;
     case "effects":
       return <EffectsEditor />;
+    case "presets":
+      return <PresetPanel />;
     default:
       return <PanelPlaceholder name={PANEL_TITLES[id]} description="Coming soon" color="var(--text-muted)" />;
   }
@@ -168,6 +178,10 @@ export default function App() {
   const [layout, setLayout] = useState<MosaicNode<PanelId> | null>(DEFAULT_LAYOUT);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showParametric, setShowParametric] = useState(false);
+  const [showBatchLine, setShowBatchLine] = useState(false);
+  const [showLyricsSync, setShowLyricsSync] = useState(false);
+  const [showNotePattern, setShowNotePattern] = useState(false);
+  const [showSpinGenerator, setShowSpinGenerator] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [expandedPanelId, setExpandedPanelId] = useState<PanelId | null>(null);
@@ -202,26 +216,34 @@ export default function App() {
     const prevTab = tabs.find((t) => t.id === prevTabId);
     const newTab = tabs.find((t) => t.id === activeTabId);
 
-    // If NewProjectDialog already saved the session, skip the automatic save
+    // If an entry point already saved the session, skip the automatic save
     if (shouldSkipSave()) {
       // Flag consumed — fall through to restore only
     } else if (prevTab && (prevTab.type === "chart" || prevTab.type === "panel" || prevTab.type === "line_event_editor" || prevTab.type === "unified_editor")) {
-      // Save session when leaving a chart tab (or chart-related tab)
-      const chartTabs = tabs.filter((t) => t.type === "chart");
-      // For panel/line_event_editor tabs, save under the most recent chart tab
-      const saveId = prevTab.type === "chart"
-        ? prevTab.id
-        : chartTabs.length > 0 ? chartTabs[chartTabs.length - 1].id : null;
+      // Save session when leaving a chart-like tab
+      let saveId: string | null = null;
+      if (prevTab.type === "chart" || prevTab.type === "unified_editor") {
+        // Chart and unified_editor tabs own their own session
+        saveId = prevTab.id;
+      } else {
+        // Panel/line_event_editor: save under the most recent chart-like tab
+        const chartLikeTabs = tabs.filter(
+          (t) => t.type === "chart" || t.type === "unified_editor"
+        );
+        saveId = chartLikeTabs.length > 0 ? chartLikeTabs[chartLikeTabs.length - 1].id : null;
+      }
       if (saveId && isLoaded) {
         saveSession(saveId);
       }
     }
 
-    // Restore session when entering a chart tab
-    if (newTab && newTab.type === "chart") {
-      restoreSession(newTab.id).catch((err) => {
-        console.warn("[App] Failed to restore chart session:", err);
-      });
+    // Restore session when entering a chart or unified_editor tab
+    if (newTab && (newTab.type === "chart" || newTab.type === "unified_editor")) {
+      if (!shouldSkipRestore()) {
+        restoreSession(newTab.id).catch((err) => {
+          console.warn("[App] Failed to restore chart session:", err);
+        });
+      }
     }
   }, [activeTabId, tabs, isLoaded]);
 
@@ -300,6 +322,19 @@ export default function App() {
     [layout, activeTab],
   );
 
+  /** Open an on-demand panel as an overlay in the unified editor drawer */
+  const handleShowOnDemandPanel = useCallback((id: PanelId) => {
+    if (activeTab?.type === "unified_editor") {
+      const es = useEditorStore.getState();
+      // Ensure the drawer is open (default to timeline if closed)
+      if (!es.canvasActivePanelId) es.setCanvasActivePanel("timeline");
+      es.setOnDemandOverlay(id);
+    } else {
+      // In classic mode, treat on-demand panels as regular toggles
+      togglePanel(id);
+    }
+  }, [activeTab, togglePanel]);
+
   /** Reset layout to defaults */
   const resetLayout = useCallback(() => {
     setLayout(DEFAULT_LAYOUT);
@@ -323,6 +358,9 @@ export default function App() {
         onOpenSettings={() => setShowSettings(true)}
         onOpenCommandPalette={() => setShowCommandPalette(true)}
         onShowParametric={() => setShowParametric(true)}
+        onShowBatchLine={() => setShowBatchLine(true)}
+        onShowLyricsSync={() => setShowLyricsSync(true)}
+        onShowOnDemandPanel={handleShowOnDemandPanel}
       />
       <TabBar />
 
@@ -389,6 +427,10 @@ export default function App() {
       {(activeTab.type === "chart" || activeTab.type === "panel" || activeTab.type === "unified_editor") && <StatusBar />}
       <NewProjectDialog open={showNewProject} onClose={() => setShowNewProject(false)} />
       <ParametricDialog open={showParametric} onClose={() => setShowParametric(false)} />
+      <BatchLineDialog open={showBatchLine} onClose={() => setShowBatchLine(false)} />
+      <LyricsSyncDialog open={showLyricsSync} onClose={() => setShowLyricsSync(false)} />
+      <NotePatternDialog open={showNotePattern} onClose={() => setShowNotePattern(false)} />
+      <SpinGeneratorDialog open={showSpinGenerator} onClose={() => setShowSpinGenerator(false)} />
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
       <CommandPalette open={showCommandPalette} onClose={() => setShowCommandPalette(false)} />
       <ToastContainer />

@@ -1,9 +1,9 @@
 // ============================================================
-// Keyframe Bar — Bottom bar for the Unified Editor (90px)
+// Keyframe Bar — Bottom bar for the Unified Editor
 //
 // 2-row layout:
-//   Row 1 (26px): Transport + Speed + Layer tabs + Beat display
-//   Row 2 (64px): Multi-property keyframe diamond strip
+//   Row 1 (28px): KEYFRAMES label + Layer pills + Lane badges + Zoom
+//   Row 2: Multi-property keyframe diamond strip
 //
 // Diamond interactions:
 //   - Click diamond to select event
@@ -15,22 +15,60 @@
 // Ported from QuickActionBar, EventEditorToolbar, and KeyframeStrip.
 // ============================================================
 
-import { useRef, useEffect, useCallback, useState, useMemo } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { useGroupStore } from "../../stores/groupStore";
+import { useBookmarkStore } from "../../stores/bookmarkStore";
+import type { Bookmark } from "../../types/bookmark";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat, floatToBeat } from "../../types/chart";
 import type { Beat, LineEvent, LineEventKind, EasingType } from "../../types/chart";
-import { EVENT_COLORS } from "../LineEventEditor/EventEditorToolbar";
+import { EVENT_COLORS } from "../../constants/eventColors";
 import { EASING_OPTIONS } from "../common/FormFields";
+import { KeyframeBarHeader } from "./KeyframeBarHeader";
+import { CurveGraph } from "./CurveGraph";
+import { PopoutCurveEditor } from "./PopoutCurveEditor";
+
+function CurveEditorResizeHandle() {
+  const setCurveEditorHeight = useEditorStore((s) => s.setCurveEditorHeight);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = useEditorStore.getState().curveEditorHeight;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const delta = startY - e.clientY;
+      setCurveEditorHeight(Math.max(150, Math.min(500, startHeight + delta)));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [setCurveEditorHeight]);
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        height: 4,
+        cursor: "row-resize",
+        backgroundColor: "var(--border-color)",
+        flexShrink: 0,
+      }}
+    />
+  );
+}
 
 // ============================================================
 // Constants
 // ============================================================
-
-const SPEED_PRESETS = [0.5, 0.75, 1.0];
 
 const KIND_SHORT: Record<string, string> = {
   x: "X", y: "Y", rotation: "R", opacity: "O", speed: "S",
@@ -62,7 +100,8 @@ interface DiamondHit {
 interface ContextMenuState {
   x: number;
   y: number;
-  hit: DiamondHit;
+  hit?: DiamondHit;
+  bookmarkHit?: Bookmark;
   showEasingSubmenu: boolean;
 }
 
@@ -97,12 +136,6 @@ export function KeyframeBar() {
   const toggleInspector = useEditorStore((s) => s.toggleUnifiedInspector);
   const selectedEventIndices = useEditorStore((s) => s.selectedEventIndices);
 
-  const isPlaying = useAudioStore((s) => s.isPlaying);
-  const playbackRate = useAudioStore((s) => s.playbackRate);
-  const togglePlayPause = useAudioStore((s) => s.togglePlayPause);
-  const stopPlayback = useAudioStore((s) => s.stop);
-  const setPlaybackRate = useAudioStore((s) => s.setPlaybackRate);
-
   const hasLayers = useChartStore((s) => {
     if (selectedLineIndex === null) return false;
     const line = s.chart.lines[selectedLineIndex];
@@ -117,18 +150,6 @@ export function KeyframeBar() {
   const pixelToBeat = useCallback((px: number, canvasWidth: number) => {
     return viewStart + (px / canvasWidth) * viewRange;
   }, [viewStart, viewRange]);
-
-  // ---- Current beat (for display) ----
-  const currentBeat = useMemo(() => {
-    const { currentTime } = useAudioStore.getState();
-    const cs = useChartStore.getState();
-    try {
-      const bl = new BpmList(cs.chart.bpm_list);
-      return bl.beatAtFloat(currentTime - cs.chart.offset);
-    } catch {
-      return 0;
-    }
-  }, [isPlaying]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Close context menu on outside click or Escape ----
   useEffect(() => {
@@ -249,6 +270,32 @@ export function KeyframeBar() {
     }
     return null;
   }, [getDisplayData]);
+
+  // ---- Bookmark hit-testing (triangles at top of strip) ----
+  const hitTestBookmark = useCallback((mouseX: number, mouseY: number): Bookmark | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    const es = useEditorStore.getState();
+    const lineIdx = es.selectedLineIndex;
+    if (lineIdx === null) return null;
+
+    // Bookmarks are rendered as triangles in the top ~12px
+    if (mouseY > 16) return null;
+
+    const bmStore = useBookmarkStore.getState();
+    const bmsForLine = bmStore.getBookmarksForLine(lineIdx);
+
+    for (const bm of bmsForLine) {
+      const bmBeat = bm.beat[0] + bm.beat[1] / bm.beat[2];
+      const bmPx = beatToPixel(bmBeat, canvas.width);
+      if (Math.abs(mouseX - bmPx) <= 6) {
+        return bm;
+      }
+    }
+
+    return null;
+  }, [beatToPixel]);
 
   // ---- Diamond strip render loop ----
   useEffect(() => {
@@ -474,6 +521,51 @@ export function KeyframeBar() {
         }
       }
 
+      // ---- Bookmark markers as colored triangles at the top ----
+      const bmStore = useBookmarkStore.getState();
+      const bmsForLine = bmStore.getBookmarksForLine(lineIdx);
+      for (const bm of bmsForLine) {
+        const bmBeat = bm.beat[0] + bm.beat[1] / bm.beat[2];
+        const bmPx = beatToPixel(bmBeat, width);
+        if (bmPx < -10 || bmPx > width + 10) continue;
+
+        const isSelected = bmStore.selectedBookmarkIds.includes(bm.id);
+
+        ctx.save();
+
+        // Selected: draw a white outline ring and a vertical snap line
+        if (isSelected) {
+          // Vertical snap guide line
+          ctx.strokeStyle = bm.color + "40";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 3]);
+          ctx.beginPath();
+          ctx.moveTo(bmPx, 12);
+          ctx.lineTo(bmPx, height);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // White outline behind the triangle
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.moveTo(bmPx, 11);
+          ctx.lineTo(bmPx - 5, 2);
+          ctx.lineTo(bmPx + 5, 2);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        ctx.fillStyle = bm.color;
+        ctx.globalAlpha = isSelected ? 1.0 : 0.7;
+        ctx.beginPath();
+        ctx.moveTo(bmPx, 9);
+        ctx.lineTo(bmPx - 3, 3);
+        ctx.lineTo(bmPx + 3, 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
       // ---- Playhead (current time) ----
       const bpmList = new BpmList(cs.chart.bpm_list);
       const curBeat = bpmList.beatAtFloat(currentTime - cs.chart.offset);
@@ -542,7 +634,22 @@ export function KeyframeBar() {
       return;
     }
 
-    // ---- Single click: check diamond hit first ----
+    // ---- Single click: check bookmark hit first ----
+    const bmHit = hitTestBookmark(mouseX, mouseY);
+    if (bmHit) {
+      const bmStore = useBookmarkStore.getState();
+      if (e.ctrlKey || e.metaKey) {
+        bmStore.toggleBookmarkSelection(bmHit.id);
+      } else {
+        bmStore.selectBookmark(bmHit.id);
+      }
+      // Snap/seek to bookmark beat
+      const bmBeat = bmHit.beat[0] + bmHit.beat[1] / bmHit.beat[2];
+      seekToBeat(bmBeat);
+      return;
+    }
+
+    // ---- Single click: check diamond hit ----
     const hit = hitTestDiamond(mouseX, mouseY);
     if (hit) {
       // Select this event
@@ -554,13 +661,14 @@ export function KeyframeBar() {
       return;
     }
 
-    // ---- Miss: seek to clicked beat ----
+    // ---- Miss: seek to clicked beat, clear bookmark selection ----
     const beat = Math.max(0, pixelToBeat(mouseX, canvas.width));
     seekToBeat(beat);
     useEditorStore.getState().clearSelection();
+    useBookmarkStore.getState().clearBookmarkSelection();
 
     isDragging.current = true;
-  }, [pixelToBeat, hitTestDiamond, seekToBeat]);
+  }, [pixelToBeat, hitTestDiamond, hitTestBookmark, seekToBeat]);
 
   // ---- Double-click: create new constant event ----
   const handleDoubleClickCreate = useCallback((mouseX: number, mouseY: number) => {
@@ -614,6 +722,19 @@ export function KeyframeBar() {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
+    // Check bookmark hit first
+    const bmHit = hitTestBookmark(mouseX, mouseY);
+    if (bmHit) {
+      useBookmarkStore.getState().selectBookmark(bmHit.id);
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        bookmarkHit: bmHit,
+        showEasingSubmenu: false,
+      });
+      return;
+    }
+
     const hit = hitTestDiamond(mouseX, mouseY);
     if (!hit) {
       setContextMenu(null);
@@ -629,7 +750,7 @@ export function KeyframeBar() {
       hit,
       showEasingSubmenu: false,
     });
-  }, [hitTestDiamond]);
+  }, [hitTestDiamond, hitTestBookmark]);
 
   // ---- Context menu actions ----
   const handleDeleteEvent = useCallback(() => {
@@ -696,6 +817,10 @@ export function KeyframeBar() {
       newValue = {
         transition: { start: event.value.constant, end: event.value.constant, easing },
       };
+    } else if ("text_transition" in event.value) {
+      newValue = {
+        text_transition: { ...event.value.text_transition, easing },
+      };
     } else {
       // Can't change easing on text_value or color_constant
       setContextMenu(null);
@@ -760,17 +885,22 @@ export function KeyframeBar() {
     return () => window.removeEventListener("mouseup", handler);
   }, []);
 
-  // ---- Display beat ----
-  const displayBeat = useMemo(() => {
-    const { currentTime } = useAudioStore.getState();
-    const cs = useChartStore.getState();
-    try {
-      const bl = new BpmList(cs.chart.bpm_list);
-      return bl.beatAtFloat(currentTime - cs.chart.offset);
-    } catch {
-      return 0;
-    }
-  }, [isPlaying, currentBeat]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Delete key to remove selected bookmarks
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        // Don't intercept if user is typing in an input
+        if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+        const bmStore = useBookmarkStore.getState();
+        if (bmStore.selectedBookmarkIds.length > 0) {
+          bmStore.deleteSelected();
+          e.preventDefault();
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   return (
     <div
@@ -783,91 +913,43 @@ export function KeyframeBar() {
         flexShrink: 0,
       }}
     >
-      {/* ---- Row 1: Controls (26px) ---- */}
+      {/* ---- Row 1: Controls (28px) ---- */}
       <div
         style={{
-          height: 26,
+          height: 28,
           display: "flex",
           alignItems: "center",
-          gap: 6,
-          padding: "0 8px",
-          borderBottom: "1px solid #222",
+          gap: 4,
+          padding: "0 10px",
+          borderBottom: "1px solid rgba(42, 42, 53, 0.4)",
           flexShrink: 0,
         }}
       >
-        {/* Transport */}
-        <button
-          onClick={togglePlayPause}
-          title={isPlaying ? "Pause" : "Play"}
-          style={{
-            background: "none",
-            border: "none",
-            color: isPlaying ? "var(--accent-primary)" : "#888",
-            cursor: "pointer",
-            fontSize: 12,
-            fontFamily: "inherit",
-            padding: "0 2px",
-          }}
-        >
-          {isPlaying ? "\u23F8" : "\u25B6"}
-        </button>
-        <button
-          onClick={stopPlayback}
-          title="Stop"
-          style={{
-            background: "none",
-            border: "none",
-            color: "#888",
-            cursor: "pointer",
-            fontSize: 12,
-            fontFamily: "inherit",
-            padding: "0 2px",
-          }}
-        >
-          {"\u23F9"}
-        </button>
+        {/* Section label */}
+        <span style={{ fontSize: 9, color: "var(--text-muted)", fontWeight: 600, letterSpacing: 0.5, marginRight: 6 }}>
+          KEYFRAMES
+        </span>
 
-        {/* Separator */}
+        {/* Divider */}
         <div style={{ width: 1, height: 14, background: "var(--border-color)" }} />
 
-        {/* Speed presets */}
-        {SPEED_PRESETS.map((s) => (
-          <button
-            key={s}
-            onClick={() => setPlaybackRate(s)}
-            style={{
-              padding: "1px 5px",
-              borderRadius: 3,
-              border: "none",
-              fontSize: 9,
-              cursor: "pointer",
-              background: playbackRate === s ? "var(--accent-primary)" : "transparent",
-              color: playbackRate === s ? "#fff" : "#666",
-              fontFamily: "inherit",
-            }}
-          >
-            {s}x
-          </button>
-        ))}
-
-        {/* Separator */}
-        <div style={{ width: 1, height: 14, background: "var(--border-color)" }} />
-
-        {/* Layer tabs */}
+        {/* Layer pills */}
         {hasLayers && (
-          <>
+          <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 4 }}>
             {[0, 1, 2, 3, 4].map((i) => (
               <button
                 key={i}
                 onClick={() => setActiveLayer(i)}
                 style={{
-                  padding: "1px 5px",
-                  borderRadius: 3,
+                  padding: "2px 6px",
+                  borderRadius: 6,
                   border: "none",
                   fontSize: 9,
                   cursor: "pointer",
+                  fontWeight: 500,
+                  transition: "all 0.15s",
                   background: activeLayer === i ? "var(--accent-primary)" : "transparent",
-                  color: activeLayer === i ? "#fff" : "#555",
+                  color: activeLayer === i ? "#fff" : "var(--text-secondary, #888)",
                   fontFamily: "inherit",
                 }}
               >
@@ -877,28 +959,101 @@ export function KeyframeBar() {
             <button
               onClick={() => setActiveLayer(-1)}
               style={{
-                padding: "1px 5px",
-                borderRadius: 3,
+                padding: "2px 6px",
+                borderRadius: 6,
                 border: "none",
                 fontSize: 9,
                 cursor: "pointer",
+                fontWeight: 500,
+                transition: "all 0.15s",
                 background: activeLayer === -1 ? "var(--accent-primary)" : "transparent",
-                color: activeLayer === -1 ? "#fff" : "#555",
+                color: activeLayer === -1 ? "#fff" : "var(--text-secondary, #888)",
                 fontFamily: "inherit",
               }}
             >
-              All
+              Flat
             </button>
-          </>
+          </div>
         )}
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Beat display */}
-        <span style={{ color: "#666", fontSize: 10 }}>
-          Beat: {displayBeat.toFixed(2)}
-        </span>
+        {/* Event lane toggle badges */}
+        <div style={{ display: "flex", gap: 3, marginRight: 4 }}>
+          {CORE_KINDS.map((kind) => {
+            const color = EVENT_COLORS[kind] || "#888";
+            return (
+              <div
+                key={kind}
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: 3,
+                  background: `${color}25`,
+                  border: `1px solid ${color}50`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 7,
+                  fontWeight: 700,
+                  color,
+                  cursor: "pointer",
+                }}
+                title={`${kind} lane`}
+              >
+                {KIND_SHORT[kind] || kind.charAt(0).toUpperCase()}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Divider */}
+        <div style={{ width: 1, height: 14, background: "var(--border-color)" }} />
+
+        {/* Zoom controls */}
+        <div style={{ display: "flex", gap: 2 }}>
+          <button
+            onClick={() => setViewRange((prev) => Math.min(200, prev * 1.25))}
+            title="Zoom out"
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: 4,
+              border: "none",
+              background: "transparent",
+              color: "var(--text-muted)",
+              fontSize: 12,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: "inherit",
+            }}
+          >
+            −
+          </button>
+          <button
+            onClick={() => setViewRange((prev) => Math.max(2, prev * 0.8))}
+            title="Zoom in"
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: 4,
+              border: "none",
+              background: "transparent",
+              color: "var(--text-muted)",
+              fontSize: 12,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: "inherit",
+            }}
+          >
+            +
+          </button>
+        </div>
 
         {/* Inspector toggle (when closed) */}
         {!inspectorOpen && (
@@ -907,11 +1062,11 @@ export function KeyframeBar() {
             style={{
               background: "none",
               border: "1px solid #333",
-              borderRadius: 3,
+              borderRadius: 6,
               color: "#666",
               cursor: "pointer",
               fontSize: 9,
-              padding: "1px 6px",
+              padding: "2px 6px",
               fontFamily: "inherit",
             }}
           >
@@ -952,6 +1107,22 @@ export function KeyframeBar() {
         />
       </div>
 
+      {/* ---- Curve Editor Header ---- */}
+      <KeyframeBarHeader />
+
+      {/* ---- Curve Graph (expanded, not popped out) ---- */}
+      {useEditorStore.getState().curveEditorExpanded &&
+        !useEditorStore.getState().curveEditorPoppedOut && (
+        <>
+          {/* Resize handle */}
+          <CurveEditorResizeHandle />
+          <CurveGraph />
+        </>
+      )}
+
+      {/* ---- Pop-out portal ---- */}
+      {useEditorStore.getState().curveEditorPoppedOut && <PopoutCurveEditor />}
+
       {/* ---- Context menu overlay ---- */}
       {contextMenu && (
         <div
@@ -969,89 +1140,174 @@ export function KeyframeBar() {
             boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
           }}
         >
-          {/* Delete */}
-          <button
-            onClick={handleDeleteEvent}
-            style={{
-              display: "block",
-              width: "100%",
-              padding: "4px 12px",
-              background: "transparent",
-              border: "none",
-              color: "#ff6b6b",
-              cursor: "pointer",
-              fontSize: 11,
-              textAlign: "left",
-              fontFamily: "inherit",
-            }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
-          >
-            Delete Event
-          </button>
-
-          {/* Divider */}
-          <div style={{ height: 1, background: "var(--border-color)", margin: "2px 0" }} />
-
-          {/* Change Easing toggle */}
-          <button
-            onClick={() => setContextMenu((prev) => prev ? { ...prev, showEasingSubmenu: !prev.showEasingSubmenu } : null)}
-            style={{
-              display: "block",
-              width: "100%",
-              padding: "4px 12px",
-              background: contextMenu.showEasingSubmenu ? "var(--bg-active)" : "transparent",
-              border: "none",
-              color: "#ccc",
-              cursor: "pointer",
-              fontSize: 11,
-              textAlign: "left",
-              fontFamily: "inherit",
-            }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
-            onMouseLeave={(e) => {
-              if (!contextMenu.showEasingSubmenu) {
-                (e.target as HTMLElement).style.background = "transparent";
-              }
-            }}
-          >
-            Change Easing {contextMenu.showEasingSubmenu ? "\u25BE" : "\u25B8"}
-          </button>
-
-          {/* Easing submenu */}
-          {contextMenu.showEasingSubmenu && (
-            <div
-              style={{
-                maxHeight: 200,
-                overflowY: "auto",
-                borderTop: "1px solid var(--border-color)",
-                padding: "2px 0",
-              }}
-            >
-              {EASING_OPTIONS.map((opt) => (
+          {contextMenu.bookmarkHit ? (
+            <>
+              {/* Bookmark context menu */}
+              <div style={{ padding: "4px 12px", fontSize: 10, color: "var(--text-muted)", borderBottom: "1px solid var(--border-color)" }}>
+                Bookmark {contextMenu.bookmarkHit.label || contextMenu.bookmarkHit.preset || ""}
+              </div>
+              <button
+                onClick={() => {
+                  if (!contextMenu.bookmarkHit) return;
+                  // Snap to this bookmark
+                  const bm = contextMenu.bookmarkHit;
+                  const bmBeat = bm.beat[0] + bm.beat[1] / bm.beat[2];
+                  seekToBeat(bmBeat);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "4px 12px",
+                  background: "transparent",
+                  border: "none",
+                  color: "#ccc",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  textAlign: "left",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+              >
+                Snap to Bookmark
+              </button>
+              <div style={{ height: 1, background: "var(--border-color)", margin: "2px 0" }} />
+              <button
+                onClick={() => {
+                  if (!contextMenu.bookmarkHit) return;
+                  useBookmarkStore.getState().removeBookmark(contextMenu.bookmarkHit.id);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "4px 12px",
+                  background: "transparent",
+                  border: "none",
+                  color: "#ff6b6b",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  textAlign: "left",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+              >
+                Delete Bookmark
+              </button>
+              {useBookmarkStore.getState().selectedBookmarkIds.length > 1 && (
                 <button
-                  key={String(opt.value)}
-                  onClick={() => handleChangeEasing(opt.value as EasingType)}
+                  onClick={() => {
+                    useBookmarkStore.getState().deleteSelected();
+                    setContextMenu(null);
+                  }}
                   style={{
                     display: "block",
                     width: "100%",
-                    padding: "3px 20px",
+                    padding: "4px 12px",
                     background: "transparent",
                     border: "none",
-                    color: "#aaa",
+                    color: "#ff6b6b",
                     cursor: "pointer",
-                    fontSize: 10,
+                    fontSize: 11,
                     textAlign: "left",
                     fontFamily: "inherit",
                   }}
-                  onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; (e.target as HTMLElement).style.color = "#fff"; }}
-                  onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; (e.target as HTMLElement).style.color = "#aaa"; }}
+                  onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                  onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
                 >
-                  {opt.label}
+                  Delete All Selected ({useBookmarkStore.getState().selectedBookmarkIds.length})
                 </button>
-              ))}
-            </div>
-          )}
+              )}
+            </>
+          ) : contextMenu.hit ? (
+            <>
+              {/* Event context menu */}
+              <button
+                onClick={handleDeleteEvent}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "4px 12px",
+                  background: "transparent",
+                  border: "none",
+                  color: "#ff6b6b",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  textAlign: "left",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+              >
+                Delete Event
+              </button>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "var(--border-color)", margin: "2px 0" }} />
+
+              {/* Change Easing toggle */}
+              <button
+                onClick={() => setContextMenu((prev) => prev ? { ...prev, showEasingSubmenu: !prev.showEasingSubmenu } : null)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "4px 12px",
+                  background: contextMenu.showEasingSubmenu ? "var(--bg-active)" : "transparent",
+                  border: "none",
+                  color: "#ccc",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  textAlign: "left",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                onMouseLeave={(e) => {
+                  if (!contextMenu.showEasingSubmenu) {
+                    (e.target as HTMLElement).style.background = "transparent";
+                  }
+                }}
+              >
+                Change Easing {contextMenu.showEasingSubmenu ? "\u25BE" : "\u25B8"}
+              </button>
+
+              {/* Easing submenu */}
+              {contextMenu.showEasingSubmenu && (
+                <div
+                  style={{
+                    maxHeight: 200,
+                    overflowY: "auto",
+                    borderTop: "1px solid var(--border-color)",
+                    padding: "2px 0",
+                  }}
+                >
+                  {EASING_OPTIONS.map((opt) => (
+                    <button
+                      key={String(opt.value)}
+                      onClick={() => handleChangeEasing(opt.value as EasingType)}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        padding: "3px 20px",
+                        background: "transparent",
+                        border: "none",
+                        color: "#aaa",
+                        cursor: "pointer",
+                        fontSize: 10,
+                        textAlign: "left",
+                        fontFamily: "inherit",
+                      }}
+                      onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; (e.target as HTMLElement).style.color = "#fff"; }}
+                      onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; (e.target as HTMLElement).style.color = "#aaa"; }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : null}
         </div>
       )}
     </div>

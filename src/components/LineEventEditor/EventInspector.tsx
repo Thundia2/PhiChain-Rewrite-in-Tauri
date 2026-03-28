@@ -12,20 +12,7 @@ import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { Field, SelectField, BeatField, EASING_OPTIONS } from "../common/FormFields";
 import { beatToFloat, floatToBeat } from "../../types/chart";
 import type { LineEvent, LineEventKind, Beat, EasingType } from "../../types/chart";
-
-const EVENT_COLORS: Record<LineEventKind, string> = {
-  x: "#ff6b6b",
-  y: "#51cf66",
-  rotation: "#ffd43b",
-  opacity: "#cc5de8",
-  speed: "#4dabf7",
-  scale_x: "#ff922b",
-  scale_y: "#20c997",
-  color: "#e599f7",
-  text: "#a9e34b",
-  incline: "#74c0fc",
-  gif: "#f06595",
-};
+import { EVENT_COLORS } from "../../constants/eventColors";
 
 const KIND_LABELS: Record<LineEventKind, string> = {
   x: "X Position",
@@ -90,14 +77,14 @@ export function EventInspector({ lineIndex }: EventInspectorProps) {
   return (
     <div className="flex flex-col h-full overflow-y-auto text-xs">
       {/* Current Beat */}
-      <div className="p-2 border-b" style={{ borderColor: "var(--border-primary)" }}>
+      <div className="p-2 border-b" style={{ borderColor: "var(--border-color)" }}>
         <div className="font-medium mb-1" style={{ color: "var(--text-primary)" }}>
           Beat {currentBeat.toFixed(2)}
         </div>
       </div>
 
       {/* Evaluated Values */}
-      <div className="p-2 border-b" style={{ borderColor: "var(--border-primary)" }}>
+      <div className="p-2 border-b" style={{ borderColor: "var(--border-color)" }}>
         <div className="font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
           Current Values
         </div>
@@ -127,7 +114,7 @@ export function EventInspector({ lineIndex }: EventInspectorProps) {
       </div>
 
       {/* Active Event Details */}
-      <div className="p-2 border-b" style={{ borderColor: "var(--border-primary)" }}>
+      <div className="p-2 border-b" style={{ borderColor: "var(--border-color)" }}>
         <div className="font-medium mb-1.5" style={{ color: EVENT_COLORS[activeProperty] }}>
           {KIND_LABELS[activeProperty]}
         </div>
@@ -152,7 +139,7 @@ export function EventInspector({ lineIndex }: EventInspectorProps) {
           style={{
             backgroundColor: "var(--bg-active)",
             color: "var(--text-primary)",
-            border: "1px solid var(--border-primary)",
+            border: "1px solid var(--border-color)",
           }}
           onClick={() => {
             const snappedBeat = floatToBeat(currentBeat);
@@ -173,7 +160,7 @@ export function EventInspector({ lineIndex }: EventInspectorProps) {
           style={{
             backgroundColor: "var(--bg-active)",
             color: "var(--text-primary)",
-            border: "1px solid var(--border-primary)",
+            border: "1px solid var(--border-color)",
           }}
           onClick={() => {
             const startBeat = floatToBeat(currentBeat);
@@ -251,7 +238,7 @@ function ActiveEventEditor({
               editEvent(lineIndex, eventIndex, {
                 value: {
                   transition: {
-                    start: parseFloat(v) || 0,
+                    start: parseFloat(v),
                     end: tv.end,
                     easing: tv.easing,
                   },
@@ -268,7 +255,7 @@ function ActiveEventEditor({
                 value: {
                   transition: {
                     start: tv.start,
-                    end: parseFloat(v) || 0,
+                    end: parseFloat(v),
                     easing: tv.easing,
                   },
                 },
@@ -298,7 +285,7 @@ function ActiveEventEditor({
           label="Value"
           value={startVal}
           onChange={(v) =>
-            editEvent(lineIndex, eventIndex, { value: { constant: parseFloat(v) || 0 } })
+            editEvent(lineIndex, eventIndex, { value: { constant: parseFloat(v) } })
           }
           step="0.1"
         />

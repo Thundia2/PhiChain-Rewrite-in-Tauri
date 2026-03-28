@@ -17,6 +17,8 @@ export interface RecentProject {
   noteCount: number;
   timestamp: number;
   importType: "new" | "rpe" | "pec" | "official";
+  /** Tauri-only: absolute path to the project folder on disk */
+  projectPath?: string;
 }
 
 interface RecentProjectsState {

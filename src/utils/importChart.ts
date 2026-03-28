@@ -13,9 +13,16 @@ import { useTabStore } from "../stores/tabStore";
 import { useAudioStore } from "../stores/audioStore";
 import { audioEngine } from "../audio/audioEngine";
 import { useGroupStore } from "../stores/groupStore";
+import { useBookmarkStore } from "../stores/bookmarkStore";
 import { useRecentProjectsStore } from "../stores/recentProjectsStore";
 import { useToastStore } from "../stores/toastStore";
 import { saveStoredProject } from "./projectStorage";
+import {
+  saveSession,
+  registerSession,
+  setSkipNextSave,
+  setSkipNextRestore,
+} from "./chartSessions";
 import type { ExtraConfig } from "../types/extra";
 
 /**
@@ -36,7 +43,9 @@ export function triggerImportChart() {
       let illustrationBlob: Blob | null = null;
       let extraJson: string | null = null;
       let groupsJson: string | null = null;
+      let bookmarksJson: string | null = null;
       let fontEntry: JSZip.JSZipObject | null = null;
+      let zip: JSZip | null = null;
 
       if (
         file.name.toLowerCase().endsWith(".zip") ||
@@ -44,20 +53,27 @@ export function triggerImportChart() {
       ) {
         const { default: JSZipLib } = await import("jszip");
         const zipData = await file.arrayBuffer();
-        const zip = await JSZipLib.loadAsync(zipData);
+        zip = await JSZipLib.loadAsync(zipData);
 
         let chartEntry: JSZip.JSZipObject | null = null;
         let audioEntry: JSZip.JSZipObject | null = null;
         let imageEntry: JSZip.JSZipObject | null = null;
         let extraEntry: JSZip.JSZipObject | null = null;
         let groupsEntry: JSZip.JSZipObject | null = null;
+        let bookmarksEntry: JSZip.JSZipObject | null = null;
 
         zip.forEach((relativePath, entry) => {
           if (entry.dir) return;
           const baseName =
             relativePath.split("/").pop()?.toLowerCase() ?? "";
-          if (baseName === "groups.json" && !groupsEntry) {
+          const pathLower = relativePath.toLowerCase();
+          if (
+            (pathLower === "canvas/groups.json" || baseName === "groups.json") &&
+            !groupsEntry
+          ) {
             groupsEntry = entry;
+          } else if (pathLower === "canvas/bookmarks.json" && !bookmarksEntry) {
+            bookmarksEntry = entry;
           } else if (baseName === "extra.json" && !extraEntry) {
             extraEntry = entry;
           } else if (baseName.endsWith(".json") && !chartEntry) {
@@ -102,6 +118,11 @@ export function triggerImportChart() {
             "string",
           );
         }
+        if (bookmarksEntry) {
+          bookmarksJson = await (bookmarksEntry as JSZip.JSZipObject).async(
+            "string",
+          );
+        }
       } else {
         chartText = await file.text();
       }
@@ -122,6 +143,18 @@ export function triggerImportChart() {
         });
       }
       const cs = useChartStore.getState();
+
+      // Save the old chart's session before replacing it
+      const tabState = useTabStore.getState();
+      const currentTab = tabState.tabs.find((t) => t.id === tabState.activeTabId);
+      if (
+        currentTab &&
+        (currentTab.type === "chart" || currentTab.type === "unified_editor") &&
+        cs.isLoaded
+      ) {
+        saveSession(currentTab.id);
+      }
+      setSkipNextSave();
 
       cs.loadFromProjectData({
         project_path: "",
@@ -158,6 +191,14 @@ export function triggerImportChart() {
         }
       }
 
+      if (bookmarksJson) {
+        try {
+          useBookmarkStore.getState().loadBookmarksJson(bookmarksJson);
+        } catch {
+          /* ignore invalid bookmarks.json */
+        }
+      }
+
       if (fontEntry) {
         try {
           const fontBlob = await (fontEntry as JSZip.JSZipObject).async(
@@ -174,10 +215,7 @@ export function triggerImportChart() {
       }
 
       // Load line textures from zip
-      if (
-        file.name.toLowerCase().endsWith(".zip") ||
-        file.name.toLowerCase().endsWith(".pez")
-      ) {
+      if (zip) {
         const textureNames = new Set<string>();
         for (const line of chart.lines) {
           if (line.texture && line.texture !== "line.png") {
@@ -185,11 +223,9 @@ export function triggerImportChart() {
           }
         }
         if (textureNames.size > 0) {
-          const { default: JSZipLib2 } = await import("jszip");
-          const zip2 = await JSZipLib2.loadAsync(await file.arrayBuffer());
           for (const texName of textureNames) {
             let texEntry: JSZip.JSZipObject | null = null;
-            zip2.forEach((relativePath, entry) => {
+            zip.forEach((relativePath, entry) => {
               if (entry.dir) return;
               const baseName = relativePath.split("/").pop() ?? "";
               if (baseName === texName && !texEntry) {
@@ -230,9 +266,11 @@ export function triggerImportChart() {
         importType: "rpe",
       });
 
-      useTabStore
-        .getState()
-        .openChart("rpe-import", meta.name || "Imported RPE Chart");
+      const importChartId = `rpe-import-${projectId}`;
+      const chartName = meta.name || "Imported RPE Chart";
+      useTabStore.getState().openChart(importChartId, chartName);
+      setSkipNextRestore();
+      registerSession(useTabStore.getState().getChartTabId(importChartId));
     } catch (e) {
       console.error("RPE import failed:", e);
       useToastStore.getState().addToast({ message: "Failed to import RPE chart. Check the console for details.", type: "error" });

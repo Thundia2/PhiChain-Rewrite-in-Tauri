@@ -13,7 +13,7 @@ import { useAudioStore } from "../../stores/audioStore";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../types/chart";
 import type { LineEvent, LineEventKind } from "../../types/chart";
-import { EVENT_COLORS } from "./EventEditorToolbar";
+import { EVENT_COLORS } from "../../constants/eventColors";
 
 interface KeyframeStripProps {
   lineIndex: number;
@@ -266,7 +266,7 @@ export function KeyframeStrip({ lineIndex }: KeyframeStripProps) {
     <div
       ref={containerRef}
       className="w-full relative"
-      style={{ height: "80px", borderTop: "1px solid var(--border-primary)" }}
+      style={{ height: "80px", borderTop: "1px solid var(--border-color)" }}
     >
       <canvas
         ref={canvasRef}

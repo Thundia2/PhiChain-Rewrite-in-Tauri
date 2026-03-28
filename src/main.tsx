@@ -37,11 +37,11 @@ restoreAppState()
         const cs = useChartStore.getState();
         cs.loadFromProjectData(data);
 
-        // Load music if available (convert filesystem path to webview URL)
+        // Load music if available (read from disk → blob URL)
         if (data.music_path) {
           try {
-            const { convertFileSrc } = await import("@tauri-apps/api/core");
-            const musicUrl = convertFileSrc(data.music_path);
+            const { readAudioFileAsUrl } = await import("./utils/ipc");
+            const musicUrl = await readAudioFileAsUrl(data.music_path);
             const ext = data.music_path.split(".").pop()?.toLowerCase() ?? "mp3";
             await audioEngine.load(musicUrl, ext);
             useAudioStore.getState().setMusicLoaded(true);
@@ -53,8 +53,8 @@ restoreAppState()
         // Load illustration if available
         if (data.illustration_path) {
           try {
-            const { convertFileSrc } = await import("@tauri-apps/api/core");
-            const illustrationUrl = convertFileSrc(data.illustration_path);
+            const { readImageFileAsUrl } = await import("./utils/ipc");
+            const illustrationUrl = await readImageFileAsUrl(data.illustration_path);
             await cs.loadIllustration(illustrationUrl);
           } catch (err) {
             console.warn("Failed to load illustration on restore:", err);

@@ -312,6 +312,9 @@ impl Format for OfficialChart {
             events
         }
 
+        if phichain.bpm_list.0.is_empty() {
+            bail!("BPM list must not be empty");
+        }
         let bpm = phichain.bpm_list.0[0].bpm; // take first bpm as base bpm for all lines, normalize all beats using this bpm
         let offset = phichain.offset / 1000.0;
 
@@ -339,6 +342,10 @@ impl Format for OfficialChart {
             fn connect_events(
                 events: &[primitive::event::LineEvent],
             ) -> Vec<primitive::event::LineEvent> {
+                if events.is_empty() {
+                    return vec![];
+                }
+
                 let mut events = events.to_owned();
                 events.sort_by_key(|e| e.start_beat);
 
@@ -352,6 +359,7 @@ impl Format for OfficialChart {
                 split_beats.dedup();
 
                 let mut connected_events = vec![];
+                let kind = events[0].kind;
 
                 for i in 0..split_beats.len() - 1 {
                     let start_beat = split_beats[i];
@@ -364,7 +372,7 @@ impl Format for OfficialChart {
                     let end = evaluate(&events, end_beat, false);
 
                     connected_events.push(primitive::event::LineEvent {
-                        kind: events.first().unwrap().kind,
+                        kind,
                         start,
                         end,
                         easing: Easing::Linear,

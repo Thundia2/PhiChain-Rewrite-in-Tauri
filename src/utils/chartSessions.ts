@@ -16,9 +16,13 @@
 import { useChartStore } from "../stores/chartStore";
 import { useEditorStore } from "../stores/editorStore";
 import { useAudioStore } from "../stores/audioStore";
+import { useGroupStore } from "../stores/groupStore";
+import { useBookmarkStore } from "../stores/bookmarkStore";
 import { audioEngine } from "../audio/audioEngine";
 import type { PhichainChart, ProjectMeta } from "../types/chart";
 import type { EditorTool, NoteSideFilter, LineSortMode } from "../types/editor";
+import type { EditorGroup } from "../types/group";
+import type { Bookmark } from "../types/bookmark";
 
 // ---- Session data shape ----
 
@@ -46,9 +50,13 @@ export interface ChartSession {
   lineSortMode: LineSortMode;
 
   // Audio info (to reload when switching back)
-  musicUrl: string | null; // The URL used to load audio (objectUrl or convertFileSrc result)
+  musicUrl: string | null; // Blob URL or filesystem path used to reload audio
   audioCurrentTime: number;
   musicLoaded: boolean;
+
+  // Editor-only data (groups + bookmarks)
+  groups: EditorGroup[];
+  bookmarks: Bookmark[];
 }
 
 // ---- Session storage ----
@@ -96,6 +104,10 @@ export function saveSession(tabId: string): void {
     musicUrl: cs.musicPath, // We use musicPath as the reload key
     audioCurrentTime: as_.currentTime,
     musicLoaded: as_.musicLoaded,
+
+    // Editor-only data
+    groups: structuredClone(useGroupStore.getState().groups),
+    bookmarks: structuredClone(useBookmarkStore.getState().bookmarks),
   };
 
   sessions.set(tabId, session);
@@ -143,6 +155,10 @@ export async function restoreSession(tabId: string): Promise<boolean> {
     eventEditorDragState: null,
   });
 
+  // Restore groups and bookmarks
+  useGroupStore.setState({ groups: session.groups });
+  useBookmarkStore.setState({ bookmarks: session.bookmarks });
+
   // Restore audio — reload the audio if it was loaded previously
   useAudioStore.setState({
     currentTime: session.audioCurrentTime,
@@ -152,8 +168,14 @@ export async function restoreSession(tabId: string): Promise<boolean> {
 
   if (session.musicLoaded && session.musicUrl) {
     try {
+      let url = session.musicUrl;
       const ext = session.musicUrl.split(".").pop()?.toLowerCase() ?? "mp3";
-      await audioEngine.load(session.musicUrl, ext);
+      // If the URL is a filesystem path (not a blob: URL), read via Tauri's fs plugin
+      if (!url.startsWith("blob:") && !url.startsWith("http")) {
+        const { readAudioFileAsUrl } = await import("./ipc");
+        url = await readAudioFileAsUrl(session.musicUrl);
+      }
+      await audioEngine.load(url, ext);
       useAudioStore.getState().setMusicLoaded(true);
       audioEngine.seek(session.audioCurrentTime);
     } catch (err) {
@@ -204,6 +226,28 @@ export function setSkipNextSave(): void {
 export function shouldSkipSave(): boolean {
   if (_skipNextSave) {
     _skipNextSave = false;
+    return true;
+  }
+  return false;
+}
+
+// ---- Skip-restore flag ----
+// Used by entry points (import, open-recent, new-project) that load chart
+// data and audio themselves. When set, the App.tsx tab-switch effect will
+// skip calling restoreSession() for the next tab activation, preventing
+// double audio loads.
+
+let _skipNextRestore = false;
+
+/** Tell the session manager to skip the next automatic restore. */
+export function setSkipNextRestore(): void {
+  _skipNextRestore = true;
+}
+
+/** Check and consume the skip-restore flag. Returns true once, then resets. */
+export function shouldSkipRestore(): boolean {
+  if (_skipNextRestore) {
+    _skipNextRestore = false;
     return true;
   }
   return false;

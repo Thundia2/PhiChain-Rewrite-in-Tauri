@@ -36,6 +36,9 @@ export interface TabState {
   openLineEventEditor: (lineIndex: number, lineName: string) => void;
   openPanel: (panelId: string, label: string) => void;
   openUnifiedEditor: () => void;
+
+  /** Get the tab ID that would be used for a given chartId under current settings */
+  getChartTabId: (chartId: string) => string;
 }
 
 const HOME_TAB: Tab = { id: "home", type: "home", label: "Home", closable: false };
@@ -48,7 +51,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
     const { tabs } = get();
     const existing = tabs.find((t) => t.id === tab.id);
     if (existing) {
-      set({ activeTabId: tab.id });
+      // Update label + data if they changed
+      set({
+        activeTabId: tab.id,
+        tabs: tabs.map((t) =>
+          t.id === tab.id ? { ...t, label: tab.label, data: tab.data ?? t.data } : t
+        ),
+      });
       return;
     }
     set({ tabs: [...tabs, tab], activeTabId: tab.id });
@@ -83,9 +92,8 @@ export const useTabStore = create<TabState>()((set, get) => ({
   openChart: (chartId, label) => {
     const defaultView = useSettingsStore.getState().defaultEditorView;
     if (defaultView === "unified") {
-      // Open the unified editor tab for this chart
       get().openTab({
-        id: "unified-editor",
+        id: `unified:${chartId}`,
         type: "unified_editor",
         label: label || "Unified Editor",
         closable: true,
@@ -121,11 +129,24 @@ export const useTabStore = create<TabState>()((set, get) => ({
   },
 
   openUnifiedEditor: () => {
+    const { tabs, activeTabId } = get();
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    let chartId = "current";
+    let label = "Unified Editor";
+    if (activeTab?.type === "chart" && activeTab.id.startsWith("chart:")) {
+      chartId = activeTab.id.slice("chart:".length);
+      label = activeTab.label;
+    }
     get().openTab({
-      id: "unified-editor",
+      id: `unified:${chartId}`,
       type: "unified_editor",
-      label: "Unified Editor",
+      label,
       closable: true,
     });
+  },
+
+  getChartTabId: (chartId) => {
+    const defaultView = useSettingsStore.getState().defaultEditorView;
+    return defaultView === "unified" ? `unified:${chartId}` : `chart:${chartId}`;
   },
 }));

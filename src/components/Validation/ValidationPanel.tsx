@@ -10,15 +10,16 @@ import { useState, useCallback } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { validateChart, type ValidationIssue, type ValidationSeverity } from "../../utils/chartValidation";
+import { ActionButton, Badge } from "../common/UIKit";
 
 const SEVERITY_COLORS: Record<ValidationSeverity, string> = {
-  error: "#ff6b6b",
-  warning: "#ffd43b",
-  info: "#4dabf7",
+  error: "var(--error)",
+  warning: "var(--warning)",
+  info: "var(--info)",
 };
 
 const SEVERITY_ICONS: Record<ValidationSeverity, string> = {
-  error: "X",
+  error: "\u2715",
   warning: "!",
   info: "i",
 };
@@ -40,45 +41,42 @@ export function ValidationPanel() {
   const infoCount = issues.filter((i) => i.severity === "info").length;
 
   return (
-    <div className="flex flex-col h-full">
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {/* Toolbar */}
       <div
-        className="flex items-center gap-2 px-2 py-1 border-b flex-shrink-0"
-        style={{ borderColor: "var(--border-primary)" }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--border-color)",
+          flexShrink: 0,
+        }}
       >
-        <button
-          className="px-3 py-1 rounded text-xs font-medium"
-          style={{
-            backgroundColor: "var(--accent-primary)",
-            color: "#fff",
-          }}
-          onClick={runValidation}
-        >
+        <ActionButton variant="primary" onClick={runValidation}>
           Validate
-        </button>
+        </ActionButton>
         {hasRun && (
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            <span style={{ color: SEVERITY_COLORS.error }}>{errorCount} errors</span>
-            {" / "}
-            <span style={{ color: SEVERITY_COLORS.warning }}>{warningCount} warnings</span>
-            {" / "}
-            <span style={{ color: SEVERITY_COLORS.info }}>{infoCount} info</span>
-          </span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Badge color="#ff4a6a">{errorCount} error{errorCount !== 1 ? "s" : ""}</Badge>
+            <Badge color="#ffd43b">{warningCount} warning{warningCount !== 1 ? "s" : ""}</Badge>
+            <Badge color="#4dabf7">{infoCount} info</Badge>
+          </div>
         )}
       </div>
 
       {/* Results list */}
-      <div className="flex-1 overflow-y-auto">
+      <div style={{ flex: 1, overflowY: "auto" }}>
         {!hasRun && (
-          <div className="flex items-center justify-center h-full">
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
               Click "Validate" to check for issues
             </span>
           </div>
         )}
         {hasRun && issues.length === 0 && (
-          <div className="flex items-center justify-center h-full">
-            <span className="text-xs" style={{ color: "#51cf66" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <span style={{ fontSize: 11, color: "var(--success)" }}>
               No issues found
             </span>
           </div>
@@ -86,8 +84,14 @@ export function ValidationPanel() {
         {issues.map((issue, idx) => (
           <div
             key={idx}
-            className="flex items-start gap-2 px-2 py-1.5 border-b cursor-pointer hover:bg-white/5"
-            style={{ borderColor: "var(--border-primary)" }}
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              padding: "8px 12px",
+              borderBottom: "1px solid rgba(42, 42, 53, 0.4)",
+              cursor: "pointer",
+            }}
             onClick={() => {
               if (issue.lineIndex !== undefined) {
                 selectLine(issue.lineIndex);
@@ -95,16 +99,24 @@ export function ValidationPanel() {
             }}
           >
             <span
-              className="flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-xs font-bold"
               style={{
-                backgroundColor: SEVERITY_COLORS[issue.severity] + "30",
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 9,
+                fontWeight: 700,
+                backgroundColor: SEVERITY_COLORS[issue.severity] + "20" as string,
                 color: SEVERITY_COLORS[issue.severity],
-                fontSize: "9px",
+                marginTop: 1,
               }}
             >
               {SEVERITY_ICONS[issue.severity]}
             </span>
-            <span className="text-xs" style={{ color: "var(--text-primary)" }}>
+            <span style={{ fontSize: 11, color: "var(--text-primary)", lineHeight: 1.4 }}>
               {issue.message}
             </span>
           </div>

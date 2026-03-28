@@ -156,7 +156,8 @@ export type LineEventValue =
   // Extended value types for color and text events
   | { color_transition: { start: [number, number, number]; end: [number, number, number]; easing: EasingType } }
   | { color_constant: [number, number, number] }
-  | { text_value: string };
+  | { text_value: string }
+  | { text_transition: { start: string; end: string; easing: EasingType } };
 
 export interface LineEvent {
   kind: LineEventKind;
@@ -216,6 +217,8 @@ export interface Line {
   curve_note_tracks: CurveNoteTrack[];
   // RPE event layers (up to 5, additive). When present, takes precedence over flat events.
   event_layers?: EventLayer[];
+  /** Editor-only category tag for organization (not exported to RPE/PEC/Official) */
+  _category?: "gameplay" | "visual" | "text" | "helper";
   // RPE line properties
   z_order?: number;                    // Render depth (default 0, higher = in front)
   is_cover?: boolean;                  // Occlude passed notes (default true)

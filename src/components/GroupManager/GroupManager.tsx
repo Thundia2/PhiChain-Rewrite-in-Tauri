@@ -14,6 +14,8 @@ import { useEditorStore } from "../../stores/editorStore";
 import { floatToBeat, beatToFloat } from "../../types/chart";
 import type { LineEventKind, NoteKind } from "../../types/chart";
 import type { EditorGroup, LineGroup, NoteGroup } from "../../types/group";
+import { INPUT_STYLE as UIK_INPUT_STYLE, SELECT_STYLE as UIK_SELECT_STYLE } from "../common/UIKit";
+import { safeParseNumber } from "../common/FormFields";
 
 // ---- Constants ----
 
@@ -61,22 +63,9 @@ const ROW_STYLE: React.CSSProperties = {
   fontSize: 11,
 };
 
-const INPUT_STYLE: React.CSSProperties = {
-  padding: "4px 8px",
-  borderRadius: 6,
-  fontSize: 11,
-  border: "0.5px solid var(--border-color)",
-  backgroundColor: "var(--bg-secondary)",
-  color: "var(--text-primary)",
-  fontFamily: "inherit",
-  outline: "none",
-  boxSizing: "border-box",
-};
+const INPUT_STYLE = UIK_INPUT_STYLE;
 
-const SELECT_STYLE: React.CSSProperties = {
-  ...INPUT_STYLE,
-  cursor: "pointer",
-};
+const SELECT_STYLE = UIK_SELECT_STYLE;
 
 const BTN_ACCENT_STYLE: React.CSSProperties = {
   padding: "5px 10px",
@@ -253,11 +242,11 @@ export function GroupManager() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 }}>
             <div>
               <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>Start Beat</label>
-              <input type="number" step="1" value={newStartBeat} onChange={(e) => setNewStartBeat(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+              <input type="number" step="1" value={newStartBeat} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setNewStartBeat(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
             </div>
             <div>
               <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>End Beat</label>
-              <input type="number" step="1" value={newEndBeat} onChange={(e) => setNewEndBeat(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+              <input type="number" step="1" value={newEndBeat} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setNewEndBeat(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
             </div>
           </div>
           <div style={{ display: "flex", gap: 4 }}>
@@ -270,7 +259,7 @@ export function GroupManager() {
       {/* Group list */}
       {groups.length === 0 && !showCreate && (
         <div style={{ color: "var(--text-muted)", fontSize: 11, padding: "12px 0", textAlign: "center" }}>
-          No groups yet. Create one or press Ctrl+G.
+          No groups yet. Create one or press Ctrl+Shift+G.
         </div>
       )}
 
@@ -310,7 +299,7 @@ export function GroupManager() {
                 type="number"
                 step="0.25"
                 value={selectedGroup.delay}
-                onChange={(e) => setGroupDelay(selectedGroup.id, parseFloat(e.target.value) || 0)}
+                onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setGroupDelay(selectedGroup.id, n); }}
                 style={{ ...INPUT_STYLE, width: 70, textAlign: "center" }}
               />
             </div>
@@ -379,10 +368,9 @@ export function GroupManager() {
                     placeholder={String(i * selectedGroup.delay)}
                     onChange={(e) => {
                       const v = e.target.value;
-                      setMemberDelayOverride(
-                        selectedGroup.id, "line", ref.lineIndex,
-                        v === "" ? undefined : parseFloat(v) || 0,
-                      );
+                      if (v === "") { setMemberDelayOverride(selectedGroup.id, "line", ref.lineIndex, undefined); return; }
+                      const n = safeParseNumber(v);
+                      if (n !== null) setMemberDelayOverride(selectedGroup.id, "line", ref.lineIndex, n);
                     }}
                     style={{ ...INPUT_STYLE, width: 55, textAlign: "center", marginRight: 4 }}
                   />
@@ -417,10 +405,9 @@ export function GroupManager() {
                       placeholder={String(i * selectedGroup.delay)}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setMemberDelayOverride(
-                          selectedGroup.id, "note", ref.noteUid,
-                          v === "" ? undefined : parseFloat(v) || 0,
-                        );
+                        if (v === "") { setMemberDelayOverride(selectedGroup.id, "note", ref.noteUid, undefined); return; }
+                        const n = safeParseNumber(v);
+                        if (n !== null) setMemberDelayOverride(selectedGroup.id, "note", ref.noteUid, n);
                       }}
                       style={{ ...INPUT_STYLE, width: 55, textAlign: "center", marginRight: 4 }}
                     />
@@ -553,20 +540,20 @@ function LineBatchOps({
           </div>
           <div>
             <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>Start Beat</label>
-            <input type="number" step="0.25" value={batchStartBeat} onChange={(e) => setBatchStartBeat(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+            <input type="number" step="0.25" value={batchStartBeat} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setBatchStartBeat(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
           </div>
           <div>
             <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>End Beat</label>
-            <input type="number" step="0.25" value={batchEndBeat} onChange={(e) => setBatchEndBeat(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+            <input type="number" step="0.25" value={batchEndBeat} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setBatchEndBeat(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
           </div>
           <div>
             <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>{batchType === "constant" ? "Value" : "Start Value"}</label>
-            <input type="number" step="0.1" value={batchValue} onChange={(e) => setBatchValue(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+            <input type="number" step="0.1" value={batchValue} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setBatchValue(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
           </div>
           {batchType === "transition" && (
             <div>
               <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>End Value</label>
-              <input type="number" step="0.1" value={batchEndValue} onChange={(e) => setBatchEndValue(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+              <input type="number" step="0.1" value={batchEndValue} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setBatchEndValue(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
             </div>
           )}
         </div>
@@ -685,7 +672,7 @@ function NoteBatchOps({
         </div>
         <div style={{ padding: "6px 10px" }}>
           <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>Delta (beats)</label>
-          <input type="number" step="0.25" value={shiftDelta} onChange={(e) => setShiftDelta(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%", marginBottom: 6 }} />
+          <input type="number" step="0.25" value={shiftDelta} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setShiftDelta(n); }} style={{ ...INPUT_STYLE, width: "100%", marginBottom: 6 }} />
           <button onClick={onShiftNotes} disabled={disabled} style={{ ...BTN_ACCENT_STYLE, width: "100%", background: "#38d9a9", opacity: disabled ? 0.4 : 1, cursor: disabled ? "not-allowed" : "pointer" }}>
             Shift {noteCount} notes
           </button>
@@ -719,7 +706,7 @@ function NoteBatchOps({
           <div style={{ display: "flex", gap: 6, alignItems: "end" }}>
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: 9, color: "var(--text-muted)", display: "block", marginBottom: 2 }}>Speed</label>
-              <input type="number" step="0.1" min="0" value={noteSpeed} onChange={(e) => setNoteSpeed(parseFloat(e.target.value) || 0)} style={{ ...INPUT_STYLE, width: "100%" }} />
+              <input type="number" step="0.1" value={noteSpeed} onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setNoteSpeed(n); }} style={{ ...INPUT_STYLE, width: "100%" }} />
             </div>
             <button onClick={onChangeSpeed} disabled={disabled} style={{ ...BTN_MUTED_STYLE, opacity: disabled ? 0.4 : 1, cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
               Set Speed
