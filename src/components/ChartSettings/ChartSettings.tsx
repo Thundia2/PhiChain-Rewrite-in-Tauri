@@ -1,4 +1,6 @@
 import { useChartStore } from "../../stores/chartStore";
+import { Card, CardRow, SectionHeader, INPUT_STYLE, SELECT_STYLE } from "../common/UIKit";
+import { safeParseNumber } from "../common/FormFields";
 
 export function ChartSettings() {
   const offset = useChartStore((s) => s.chart.offset);
@@ -6,238 +8,171 @@ export function ChartSettings() {
   const setOffset = useChartStore((s) => s.setOffset);
   const setMeta = useChartStore((s) => s.setMeta);
 
-  const inputStyle = {
-    backgroundColor: "var(--bg-active)",
-    color: "var(--text-primary)",
-    border: "1px solid var(--border-primary)",
-  };
-
   return (
-    <div className="flex flex-col gap-2 p-2 text-xs">
-      <div className="font-medium" style={{ color: "var(--text-primary)" }}>
-        Chart
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 0, padding: 12, fontSize: 12 }}>
+      <SectionHeader color="var(--accent-primary)">Chart</SectionHeader>
 
       {/* Offset */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Offset (s)</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="number"
-          step="0.001"
-          value={offset}
-          onChange={(e) => setOffset(parseFloat(e.target.value) || 0)}
-        />
-      </label>
+      <Card>
+        <CardRow label="Offset" description="Audio offset in seconds" last>
+          <input
+            style={{ ...INPUT_STYLE, width: 100 }}
+            type="number"
+            step="0.001"
+            value={offset}
+            onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setOffset(n); }}
+          />
+        </CardRow>
+      </Card>
 
-      <div
-        className="border-t mt-1 pt-2 font-medium"
-        style={{ borderColor: "var(--border-primary)", color: "var(--text-primary)" }}
-      >
-        Metadata
-      </div>
+      <SectionHeader color="var(--accent-primary)">Metadata</SectionHeader>
 
-      {/* Song name */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Name</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          value={meta.name}
-          onChange={(e) => setMeta({ name: e.target.value })}
-        />
-      </label>
+      {/* Metadata fields */}
+      <Card>
+        <CardRow label="Name">
+          <input
+            style={{ ...INPUT_STYLE, flex: 1, width: 140 }}
+            type="text"
+            value={meta.name}
+            onChange={(e) => setMeta({ name: e.target.value })}
+          />
+        </CardRow>
+        <CardRow label="Level">
+          <input
+            style={{ ...INPUT_STYLE, flex: 1, width: 140 }}
+            type="text"
+            value={meta.level}
+            onChange={(e) => setMeta({ level: e.target.value })}
+          />
+        </CardRow>
+        <CardRow label="Composer">
+          <input
+            style={{ ...INPUT_STYLE, flex: 1, width: 140 }}
+            type="text"
+            value={meta.composer}
+            onChange={(e) => setMeta({ composer: e.target.value })}
+          />
+        </CardRow>
+        <CardRow label="Charter">
+          <input
+            style={{ ...INPUT_STYLE, flex: 1, width: 140 }}
+            type="text"
+            value={meta.charter}
+            onChange={(e) => setMeta({ charter: e.target.value })}
+          />
+        </CardRow>
+        <CardRow label="Illustrator" last>
+          <input
+            style={{ ...INPUT_STYLE, flex: 1, width: 140 }}
+            type="text"
+            value={meta.illustrator}
+            onChange={(e) => setMeta({ illustrator: e.target.value })}
+          />
+        </CardRow>
+      </Card>
 
-      {/* Level */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Level</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          value={meta.level}
-          onChange={(e) => setMeta({ level: e.target.value })}
-        />
-      </label>
+      <SectionHeader color="var(--accent-primary)">Phira / info.yml</SectionHeader>
 
-      {/* Composer */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Composer</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          value={meta.composer}
-          onChange={(e) => setMeta({ composer: e.target.value })}
-        />
-      </label>
-
-      {/* Charter */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Charter</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          value={meta.charter}
-          onChange={(e) => setMeta({ charter: e.target.value })}
-        />
-      </label>
-
-      {/* Illustrator */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Illustrator</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          value={meta.illustrator}
-          onChange={(e) => setMeta({ illustrator: e.target.value })}
-        />
-      </label>
-
-      {/* ---- Phira Extended Fields ---- */}
-      <div
-        className="border-t mt-1 pt-2 font-medium"
-        style={{ borderColor: "var(--border-primary)", color: "var(--text-primary)" }}
-      >
-        Phira / info.yml
-      </div>
-
-      {/* Preview Start */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Preview start</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="number"
-          step="0.1"
-          placeholder="0"
-          value={meta.preview_start ?? ""}
-          onChange={(e) => setMeta({ preview_start: e.target.value ? parseFloat(e.target.value) : undefined })}
-        />
-      </label>
-
-      {/* Preview End */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Preview end</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="number"
-          step="0.1"
-          placeholder="auto (+15s)"
-          value={meta.preview_end ?? ""}
-          onChange={(e) => setMeta({ preview_end: e.target.value ? parseFloat(e.target.value) : undefined })}
-        />
-      </label>
-
-      {/* Aspect Ratio */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Aspect ratio</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="number"
-          step="0.01"
-          placeholder="1.778 (16:9)"
-          value={meta.aspect_ratio ?? ""}
-          onChange={(e) => setMeta({ aspect_ratio: e.target.value ? parseFloat(e.target.value) : undefined })}
-        />
-      </label>
-
-      {/* Background Dim */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>BG dim</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="number"
-          step="0.05"
-          min="0"
-          max="1"
-          placeholder="0.6"
-          value={meta.background_dim ?? ""}
-          onChange={(e) => setMeta({ background_dim: e.target.value ? parseFloat(e.target.value) : undefined })}
-        />
-      </label>
-
-      {/* Line Length */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Line length</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="number"
-          step="0.5"
-          placeholder="6.0"
-          value={meta.line_length ?? ""}
-          onChange={(e) => setMeta({ line_length: e.target.value ? parseFloat(e.target.value) : undefined })}
-        />
-      </label>
-
-      {/* Tip */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Tip</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          placeholder="Loading screen tip"
-          value={meta.tip ?? ""}
-          onChange={(e) => setMeta({ tip: e.target.value || undefined })}
-        />
-      </label>
-
-      {/* Tags */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Tags</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          placeholder="tag1, tag2, ..."
-          value={(meta.tags ?? []).join(", ")}
-          onChange={(e) => {
-            const raw = e.target.value;
-            const tags = raw ? raw.split(",").map(t => t.trim()).filter(Boolean) : undefined;
-            setMeta({ tags });
-          }}
-        />
-      </label>
-
-      {/* Intro */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Intro</span>
-        <input
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          type="text"
-          placeholder="Chart introduction"
-          value={meta.intro ?? ""}
-          onChange={(e) => setMeta({ intro: e.target.value || undefined })}
-        />
-      </label>
-
-      {/* Hold Partial Cover */}
-      <label className="flex items-center gap-2">
-        <span className="w-20" style={{ color: "var(--text-muted)" }}>Hold cover</span>
-        <select
-          className="flex-1 px-1 py-0.5 rounded text-xs"
-          style={inputStyle}
-          value={meta.hold_partial_cover == null ? "" : meta.hold_partial_cover ? "tail" : "head"}
-          onChange={(e) => {
-            if (e.target.value === "") setMeta({ hold_partial_cover: undefined });
-            else setMeta({ hold_partial_cover: e.target.value === "tail" });
-          }}
-        >
-          <option value="">Default (head)</option>
-          <option value="head">Head</option>
-          <option value="tail">Tail</option>
-        </select>
-      </label>
+      {/* Phira Extended Fields */}
+      <Card>
+        <CardRow label="Preview start">
+          <input
+            style={{ ...INPUT_STYLE, width: 100 }}
+            type="number"
+            step="0.1"
+            placeholder="0"
+            value={meta.preview_start ?? ""}
+            onChange={(e) => setMeta({ preview_start: e.target.value ? parseFloat(e.target.value) : undefined })}
+          />
+        </CardRow>
+        <CardRow label="Preview end">
+          <input
+            style={{ ...INPUT_STYLE, width: 100 }}
+            type="number"
+            step="0.1"
+            placeholder="auto (+15s)"
+            value={meta.preview_end ?? ""}
+            onChange={(e) => setMeta({ preview_end: e.target.value ? parseFloat(e.target.value) : undefined })}
+          />
+        </CardRow>
+        <CardRow label="Aspect ratio">
+          <input
+            style={{ ...INPUT_STYLE, width: 100 }}
+            type="number"
+            step="0.01"
+            placeholder="1.778 (16:9)"
+            value={meta.aspect_ratio ?? ""}
+            onChange={(e) => setMeta({ aspect_ratio: e.target.value ? parseFloat(e.target.value) : undefined })}
+          />
+        </CardRow>
+        <CardRow label="BG dim">
+          <input
+            style={{ ...INPUT_STYLE, width: 100 }}
+            type="number"
+            step="0.05"
+            min="0"
+            max="1"
+            placeholder="0.6"
+            value={meta.background_dim ?? ""}
+            onChange={(e) => setMeta({ background_dim: e.target.value ? parseFloat(e.target.value) : undefined })}
+          />
+        </CardRow>
+        <CardRow label="Line length">
+          <input
+            style={{ ...INPUT_STYLE, width: 100 }}
+            type="number"
+            step="0.5"
+            placeholder="6.0"
+            value={meta.line_length ?? ""}
+            onChange={(e) => setMeta({ line_length: e.target.value ? parseFloat(e.target.value) : undefined })}
+          />
+        </CardRow>
+        <CardRow label="Tip">
+          <input
+            style={{ ...INPUT_STYLE, width: 140 }}
+            type="text"
+            placeholder="Loading screen tip"
+            value={meta.tip ?? ""}
+            onChange={(e) => setMeta({ tip: e.target.value || undefined })}
+          />
+        </CardRow>
+        <CardRow label="Tags">
+          <input
+            style={{ ...INPUT_STYLE, width: 140 }}
+            type="text"
+            placeholder="tag1, tag2, ..."
+            value={(meta.tags ?? []).join(", ")}
+            onChange={(e) => {
+              const raw = e.target.value;
+              const tags = raw ? raw.split(",").map(t => t.trim()).filter(Boolean) : undefined;
+              setMeta({ tags });
+            }}
+          />
+        </CardRow>
+        <CardRow label="Intro">
+          <input
+            style={{ ...INPUT_STYLE, width: 140 }}
+            type="text"
+            placeholder="Chart introduction"
+            value={meta.intro ?? ""}
+            onChange={(e) => setMeta({ intro: e.target.value || undefined })}
+          />
+        </CardRow>
+        <CardRow label="Hold cover" last>
+          <select
+            style={{ ...SELECT_STYLE, width: 120 }}
+            value={meta.hold_partial_cover == null ? "" : meta.hold_partial_cover ? "tail" : "head"}
+            onChange={(e) => {
+              if (e.target.value === "") setMeta({ hold_partial_cover: undefined });
+              else setMeta({ hold_partial_cover: e.target.value === "tail" });
+            }}
+          >
+            <option value="">Default (head)</option>
+            <option value="head">Head</option>
+            <option value="tail">Tail</option>
+          </select>
+        </CardRow>
+      </Card>
     </div>
   );
 }

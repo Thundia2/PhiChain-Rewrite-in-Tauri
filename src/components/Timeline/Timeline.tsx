@@ -24,6 +24,7 @@ import { beatToFloat } from "../../types/chart";
 import { snapBeat } from "../../utils/beat";
 import type { NoteKind } from "../../types/chart";
 import type { EditorTool } from "../../types/editor";
+import { TimelineMinimap } from "./TimelineMinimap";
 
 /** Extra beats of padding beyond the last content */
 const SCROLL_PADDING_BEATS = 8;
@@ -163,6 +164,25 @@ export function Timeline() {
 
       const line = es.selectedLineIndex !== null ? c.lines[es.selectedLineIndex] : null;
 
+      // Build overlay lines from editorStore if overlay is enabled
+      const overlayLines: { notes: import("../../types/chart").Note[]; lineIndex: number; color: string }[] = [];
+      if (es.timelineOverlayEnabled && es.timelineOverlayLines.length > 0) {
+        // Assign distinct colors for overlay lines
+        const OVERLAY_COLORS = ["#ff6b6b", "#51cf66", "#ffd43b", "#cc5de8", "#4dabf7", "#ff922b", "#20c997", "#f06595"];
+        for (let oi = 0; oi < es.timelineOverlayLines.length; oi++) {
+          const oLineIdx = es.timelineOverlayLines[oi];
+          if (oLineIdx === es.selectedLineIndex) continue; // skip selected line
+          const oLine = c.lines[oLineIdx];
+          if (oLine) {
+            overlayLines.push({
+              notes: oLine.notes,
+              lineIndex: oLineIdx,
+              color: OVERLAY_COLORS[oi % OVERLAY_COLORS.length],
+            });
+          }
+        }
+      }
+
       renderer.render({
         notes: line?.notes ?? [],
         events: line?.events ?? [],
@@ -178,6 +198,8 @@ export function Timeline() {
         canvasHeight: rect.height,
         dragSelectionRect: es.dragSelectionRect,
         pendingNote: es.pendingNote,
+        overlayLines: overlayLines.length > 0 ? overlayLines : undefined,
+        overlayOpacity: es.timelineOverlayOpacity,
       });
 
       rafRef.current = requestAnimationFrame(frame);
@@ -453,10 +475,11 @@ export function Timeline() {
 
   return (
     <div
-      ref={containerRef}
-      className="w-full h-full relative"
+      className="w-full h-full relative flex flex-col"
       style={{ backgroundColor: "#16213e" }}
     >
+      <TimelineMinimap />
+      <div ref={containerRef} className="flex-1 relative min-h-0">
       <canvas
         ref={canvasRef}
         className="absolute inset-0"
@@ -513,6 +536,7 @@ export function Timeline() {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

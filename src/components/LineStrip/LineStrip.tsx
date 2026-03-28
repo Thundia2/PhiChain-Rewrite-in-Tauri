@@ -11,14 +11,17 @@
 //   - Inactive: default gray
 // ============================================================
 
-import { useMemo, useRef, useEffect } from "react";
+import { useMemo, useRef, useEffect, useCallback } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { useGroupStore } from "../../stores/groupStore";
+import { useTabStore } from "../../stores/tabStore";
 import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../utils/beat";
+import { LINE_CATEGORY_COLORS } from "../LineList/lineCategories";
+import { autoCategorize } from "../LineList/lineCategories";
 
 type LineActivity = "active" | "coming-soon" | "just-passed" | "long-passed" | "inactive";
 
@@ -178,8 +181,25 @@ export function LineStrip() {
   const multiSelectedLineIndices = useEditorStore((s) => s.multiSelectedLineIndices);
   const addLine = useChartStore((s) => s.addLine);
   const groups = useGroupStore((s) => s.groups);
+  const openLineEventEditor = useTabStore((s) => s.openLineEventEditor);
   const currentTime = useAudioStore((s) => s.currentTime);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // LineStrip filter state
+  const searchOpen = useEditorStore((s) => s.lineStripSearchOpen);
+  const searchQuery = useEditorStore((s) => s.lineStripSearchQuery);
+  const categoryFilter = useEditorStore((s) => s.lineStripCategoryFilter);
+  const setLineStripSearch = useEditorStore((s) => s.setLineStripSearch);
+  const toggleLineStripSearch = useEditorStore((s) => s.toggleLineStripSearch);
+  const toggleLineStripCategory = useEditorStore((s) => s.toggleLineStripCategory);
+
+  // Focus search input when opened
+  useEffect(() => {
+    if (searchOpen && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [searchOpen]);
 
   // BpmList for time-to-beat conversion
   const bpmList = useMemo(() => new BpmList(bpmPoints), [bpmPoints]);
@@ -189,7 +209,8 @@ export function LineStrip() {
   const lineData = useMemo(() => {
     return lines.map((line, i) => {
       const classification = classifyLine(line.events, line.event_layers, currentBeat);
-      return { index: i, line, ...classification };
+      const category = line._category ?? autoCategorize(line);
+      return { index: i, line, category, ...classification };
     });
   }, [lines, currentBeat]);
 
@@ -197,6 +218,27 @@ export function LineStrip() {
   const sortedLines = useMemo(() => {
     return [...lineData].sort((a, b) => a.sortKey - b.sortKey);
   }, [lineData]);
+
+  // Apply search and category filters
+  const filteredLines = useMemo(() => {
+    let result = sortedLines;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(({ line, index }) =>
+        (line.name || `Line ${index}`).toLowerCase().includes(q),
+      );
+    }
+    if (categoryFilter) {
+      result = result.filter(({ category }) => category && categoryFilter.includes(category));
+    }
+    return result;
+  }, [sortedLines, searchQuery, categoryFilter]);
+
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      toggleLineStripSearch();
+    }
+  }, [toggleLineStripSearch]);
 
   // Auto-scroll selected line into view
   useEffect(() => {
@@ -226,7 +268,62 @@ export function LineStrip() {
       }}
       className="linestrip-scroll"
     >
-      {sortedLines.map(({ index, line, activity, isRecurring }) => {
+      {/* Search toggle button */}
+      <button
+        onClick={toggleLineStripSearch}
+        style={{
+          width: 24, height: 22, borderRadius: 3, border: "none",
+          background: searchOpen ? "var(--accent-primary)" : "transparent",
+          color: searchOpen ? "#fff" : "var(--text-muted)",
+          cursor: "pointer", fontSize: 12, flexShrink: 0, padding: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontFamily: "inherit",
+        }}
+        title="Search lines (Ctrl+L)"
+      >
+        S
+      </button>
+
+      {/* Search input (visible when open) */}
+      {searchOpen && (
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setLineStripSearch(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          placeholder="Search..."
+          style={{
+            width: 100, height: 22, borderRadius: 3, fontSize: 10,
+            border: "1px solid var(--border-color)",
+            background: "var(--bg-primary)", color: "var(--text-primary)",
+            padding: "0 6px", flexShrink: 0, outline: "none",
+            fontFamily: "inherit",
+          }}
+        />
+      )}
+
+      {/* Category filter dots */}
+      {(["gameplay", "visual", "text", "helper"] as const).map((cat) => (
+        <button
+          key={cat}
+          onClick={() => toggleLineStripCategory(cat)}
+          style={{
+            width: 10, height: 10, borderRadius: "50%", border: "none",
+            background: LINE_CATEGORY_COLORS[cat],
+            opacity: !categoryFilter || categoryFilter.includes(cat) ? 1 : 0.25,
+            cursor: "pointer", flexShrink: 0, padding: 0,
+            outline: categoryFilter?.includes(cat) ? `2px solid ${LINE_CATEGORY_COLORS[cat]}` : "none",
+            outlineOffset: 1,
+          }}
+          title={`Filter: ${cat}`}
+        />
+      ))}
+
+      {/* Separator */}
+      <div style={{ width: 1, height: 16, background: "var(--border-color)", flexShrink: 0 }} />
+
+      {filteredLines.map(({ index, line, activity, isRecurring, category }) => {
         const isSelected = selectedLineIndex === index;
         const isMultiSelected = multiSelectedLineIndices.includes(index);
         const style = getChipStyle(activity, isRecurring, isSelected);
@@ -242,6 +339,10 @@ export function LineStrip() {
               } else {
                 selectLine(isSelected ? null : index);
               }
+            }}
+            onDoubleClick={() => {
+              selectLine(index);
+              openLineEventEditor(index, line.name || `Line ${index + 1}`);
             }}
             style={{
               padding: "3px 8px",
@@ -265,6 +366,12 @@ export function LineStrip() {
             }}
             title={`${line.name || `Line ${index}`} — ${activity}${isRecurring ? " (recurring)" : ""}${lineGroups.length > 0 ? ` [${lineGroups.map((g) => g.name).join(", ")}]` : ""}`}
           >
+            {category && LINE_CATEGORY_COLORS[category] && (
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: LINE_CATEGORY_COLORS[category], flexShrink: 0,
+              }} />
+            )}
             {lineGroups.map((g) => (
               <span
                 key={g.id}

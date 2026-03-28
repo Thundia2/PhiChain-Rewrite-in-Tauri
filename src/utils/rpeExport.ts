@@ -186,12 +186,32 @@ function buildExtendedEvents(events: LineEvent[]): Record<string, unknown> | und
   });
 
   const textEvents = events.filter((e) => e.kind === "text").map((event) => {
+    let startText = "";
+    let endText = "";
+    let easingInfo: ReturnType<typeof phichainEasingToRpe> = { easingType: 1 };
+
+    if ("text_value" in event.value) {
+      startText = event.value.text_value;
+      endText = event.value.text_value;
+    } else if ("text_transition" in event.value) {
+      startText = event.value.text_transition.start;
+      endText = event.value.text_transition.end;
+      easingInfo = phichainEasingToRpe(event.value.text_transition.easing);
+    }
+
     const te: Record<string, unknown> = {
       startTime: event.start_beat,
       endTime: event.end_beat,
-      start: "text_value" in event.value ? event.value.text_value : "",
-      end: "text_value" in event.value ? event.value.text_value : "",
+      start: startText,
+      end: endText,
+      easingType: easingInfo.easingType,
     };
+    if (easingInfo.bezier) {
+      te.bezier = 1;
+      te.bezierPoints = easingInfo.bezierPoints;
+    }
+    if (event.easing_left != null && event.easing_left !== 0) te.easingLeft = event.easing_left;
+    if (event.easing_right != null && event.easing_right !== 1) te.easingRight = event.easing_right;
     if (event.linkgroup != null) te.linkgroup = event.linkgroup;
     if (event.font) te.font = event.font;
     return te;

@@ -89,13 +89,29 @@ pub fn load_project(path: String) -> Result<ProjectData, String> {
 ///
 /// The frontend sends the full chart as a JSON string, and we write
 /// it to chart.json in the project directory.
+///
+/// We validate that the input is well-formed JSON with the expected top-level
+/// structure (has "format" and "lines" fields), but we do NOT deserialize into
+/// PhichainChart because the TypeScript frontend supports extended event types
+/// (scale_x, color, text, incline, gif) for RPE compatibility that the Rust
+/// backend doesn't define. These are valid chart data that must be preserved.
 #[tauri::command]
 pub fn save_project(project_path: String, chart_json: String) -> Result<(), String> {
     let chart_path = PathBuf::from(&project_path).join("chart.json");
 
-    // Validate that the JSON is a valid PhichainChart before writing
-    let _chart: PhichainChart = serde_json::from_str(&chart_json)
-        .map_err(|e| format!("Invalid chart data: {}", e))?;
+    // Validate that the input is well-formed JSON with expected structure
+    let json_value: serde_json::Value = serde_json::from_str(&chart_json)
+        .map_err(|e| format!("Invalid JSON: {}", e))?;
+
+    // Basic structure check: ensure it has the required top-level fields
+    let obj = json_value.as_object()
+        .ok_or_else(|| "Chart JSON must be an object".to_string())?;
+    if !obj.contains_key("format") {
+        return Err("Chart JSON missing 'format' field".to_string());
+    }
+    if !obj.contains_key("lines") {
+        return Err("Chart JSON missing 'lines' field".to_string());
+    }
 
     std::fs::write(chart_path, &chart_json)
         .map_err(|e| format!("Failed to write chart.json: {}", e))?;

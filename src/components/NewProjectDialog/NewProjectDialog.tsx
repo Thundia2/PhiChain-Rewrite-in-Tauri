@@ -12,10 +12,11 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useTabStore } from "../../stores/tabStore";
 import { audioEngine } from "../../audio/audioEngine";
 import { isTauri, pickFile, createProject, loadProject } from "../../utils/ipc";
-import { saveSession, registerSession, setSkipNextSave } from "../../utils/chartSessions";
+import { saveSession, registerSession, setSkipNextSave, setSkipNextRestore } from "../../utils/chartSessions";
 import { useRecentProjectsStore } from "../../stores/recentProjectsStore";
 import { saveStoredProject } from "../../utils/projectStorage";
 import type { ProjectMeta, PhichainChart } from "../../types/chart";
+import { safeParseNumber } from "../common/FormFields";
 
 interface Props {
   open: boolean;
@@ -305,6 +306,39 @@ export function NewProjectDialog({ open, onClose }: Props) {
   const musicName = musicFile?.name ?? musicPath?.split(/[\\/]/).pop() ?? null;
   const illustrationName = illustrationFile?.name ?? illustrationPath?.split(/[\\/]/).pop() ?? null;
 
+  /** Extract metadata from the selected audio file and auto-fill empty fields. */
+  const processAudioMetadata = async (file?: File, path?: string) => {
+    try {
+      const { extractMetadataFromFile, extractMetadataFromPath } = await import("../../utils/audioMetadata");
+      const audioMeta = file
+        ? await extractMetadataFromFile(file)
+        : path
+          ? await extractMetadataFromPath(path)
+          : null;
+      if (!audioMeta) return;
+
+      setMeta((prev) => ({
+        ...prev,
+        name: prev.name || audioMeta.title || "",
+        composer: prev.composer || audioMeta.artist || "",
+      }));
+
+      if (audioMeta.coverArt && !illustrationFile && !illustrationPath) {
+        const extMap: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+        const ext = extMap[audioMeta.coverArt.format] ?? "jpg";
+        const coverFile = new File(
+          [audioMeta.coverArt.data],
+          `cover.${ext}`,
+          { type: audioMeta.coverArt.format },
+        );
+        setIllustrationFile(coverFile);
+        setIllustrationPath(null);
+      }
+    } catch {
+      // Metadata extraction is best-effort — silently ignore failures
+    }
+  };
+
   const handlePickMusic = async () => {
     if (isTauri()) {
       const path = await pickFile([
@@ -314,6 +348,7 @@ export function NewProjectDialog({ open, onClose }: Props) {
         setMusicPath(path);
         setMusicFile(null);
         setError(null);
+        processAudioMetadata(undefined, path);
       }
     } else {
       fileInputRef.current?.click();
@@ -326,6 +361,7 @@ export function NewProjectDialog({ open, onClose }: Props) {
       setMusicFile(file);
       setMusicPath(null);
       setError(null);
+      processAudioMetadata(file);
     }
   };
 
@@ -365,14 +401,20 @@ export function NewProjectDialog({ open, onClose }: Props) {
       let musicUrl: string | null = null;
 
       // Save the current chart's session before loading a new one
-      const currentChartTabs = useTabStore.getState().tabs.filter((t) => t.type === "chart");
+      const chartLikeTabs = useTabStore.getState().tabs.filter(
+        (t) => t.type === "chart" || t.type === "unified_editor"
+      );
       const currentActiveTab = useTabStore.getState().tabs.find(
         (t) => t.id === useTabStore.getState().activeTabId,
       );
-      if (currentActiveTab?.type === "chart" && useChartStore.getState().isLoaded) {
+      if (
+        currentActiveTab &&
+        (currentActiveTab.type === "chart" || currentActiveTab.type === "unified_editor") &&
+        useChartStore.getState().isLoaded
+      ) {
         saveSession(currentActiveTab.id);
-      } else if (currentChartTabs.length > 0 && useChartStore.getState().isLoaded) {
-        saveSession(currentChartTabs[currentChartTabs.length - 1].id);
+      } else if (chartLikeTabs.length > 0 && useChartStore.getState().isLoaded) {
+        saveSession(chartLikeTabs[chartLikeTabs.length - 1].id);
       }
 
       setSkipNextSave();
@@ -386,24 +428,36 @@ export function NewProjectDialog({ open, onClose }: Props) {
         cs.loadFromProjectData(projectData);
 
         if (projectData.music_path) {
-          const { convertFileSrc } = await import("@tauri-apps/api/core");
-          const url = convertFileSrc(projectData.music_path);
+          const { readAudioFileAsUrl } = await import("../../utils/ipc");
+          const url = await readAudioFileAsUrl(projectData.music_path);
           const ext = projectData.music_path.split(".").pop()?.toLowerCase() ?? "mp3";
           await audioEngine.load(url, ext);
           useAudioStore.getState().setMusicLoaded(true);
         }
 
         if (projectData.illustration_path) {
-          const { convertFileSrc } = await import("@tauri-apps/api/core");
-          const illustUrl = convertFileSrc(projectData.illustration_path);
+          const { readImageFileAsUrl } = await import("../../utils/ipc");
+          const illustUrl = await readImageFileAsUrl(projectData.illustration_path);
           await cs.loadIllustration(illustUrl);
         }
 
         useEditorStore.getState().selectLine(0);
 
-        const tabId = `chart:${folderPath}`;
         useTabStore.getState().openChart(folderPath, finalMeta.name || "Untitled Chart");
+        const tabId = useTabStore.getState().getChartTabId(folderPath);
+        setSkipNextRestore();
         registerSession(tabId);
+
+        useRecentProjectsStore.getState().addRecent({
+          id: crypto.randomUUID(),
+          name: finalMeta.name || "Untitled",
+          composer: finalMeta.composer || "",
+          level: composedLevel,
+          lineCount: 1,
+          noteCount: 0,
+          importType: "new",
+          projectPath: folderPath,
+        });
 
         onClose();
         return;
@@ -459,8 +513,9 @@ export function NewProjectDialog({ open, onClose }: Props) {
       useEditorStore.getState().selectLine(0);
 
       const chartId = `browser-${Date.now()}`;
-      const tabId = `chart:${chartId}`;
       useTabStore.getState().openChart(chartId, finalMeta.name || "Untitled Chart");
+      const tabId = useTabStore.getState().getChartTabId(chartId);
+      setSkipNextRestore();
       registerSession(tabId);
 
       const projectId = crypto.randomUUID();
@@ -572,6 +627,7 @@ export function NewProjectDialog({ open, onClose }: Props) {
                     const file = e.dataTransfer.files?.[0];
                     if (file && /\.(mp3|wav|ogg|flac|m4a)$/i.test(file.name)) {
                       setMusicFile(file); setMusicPath(null); setError(null);
+                      processAudioMetadata(file);
                     }
                   }}
                   onClick={handlePickMusic}
@@ -659,7 +715,7 @@ export function NewProjectDialog({ open, onClose }: Props) {
                         <input
                           type="number"
                           value={levelNumber}
-                          onChange={(e) => setLevelNumber(parseInt(e.target.value) || 0)}
+                          onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setLevelNumber(Math.trunc(n)); }}
                           style={{
                             ...INPUT_STYLE,
                             width: 50,

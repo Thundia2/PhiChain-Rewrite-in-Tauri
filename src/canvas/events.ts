@@ -255,6 +255,10 @@ function evaluateTextEventsFromGrouped(textEvents: LineEvent[], beat: number, st
 
     if ("text_value" in event.value) {
       bestText = event.value.text_value;
+    } else if ("text_transition" in event.value) {
+      bestText = beat >= endBeat
+        ? event.value.text_transition.end
+        : event.value.text_transition.start;
     }
     bestIsAffecting = isAffecting;
     bestEndBeat = endBeat;

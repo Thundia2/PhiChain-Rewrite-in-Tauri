@@ -8,6 +8,7 @@ import type { ExtraConfig } from "../types/extra";
 import type { PanelId } from "../types/editor";
 import { useEditorStore } from "../stores/editorStore";
 import { useGroupStore } from "../stores/groupStore";
+import { useBookmarkStore } from "../stores/bookmarkStore";
 import { useRecentProjectsStore } from "../stores/recentProjectsStore";
 import { useToastStore } from "../stores/toastStore";
 import { saveStoredProject } from "../utils/projectStorage";
@@ -49,6 +50,9 @@ export function useMenus(
   onResetLayout?: () => void,
   onNewChart?: () => void,
   onShowParametric?: () => void,
+  onShowBatchLine?: () => void,
+  onShowLyricsSync?: () => void,
+  onShowOnDemandPanel?: (id: PanelId) => void,
 ): Menu[] {
   const projectPath = useChartStore((s) => s.projectPath);
   const getChartJson = useChartStore((s) => s.getChartJson);
@@ -99,6 +103,7 @@ export function useMenus(
                 let illustrationBlob: Blob | null = null;
                 let extraJson: string | null = null;
                 let groupsJson: string | null = null;
+                let bookmarksJson: string | null = null;
                 let fontEntry: JSZip.JSZipObject | null = null;
                 let infoYmlEntry: JSZip.JSZipObject | null = null;
 
@@ -112,14 +117,23 @@ export function useMenus(
                   let imageEntry: JSZip.JSZipObject | null = null;
                   let extraEntry: JSZip.JSZipObject | null = null;
                   let groupsEntry: JSZip.JSZipObject | null = null;
+                  let bookmarksEntry: JSZip.JSZipObject | null = null;
 
                   zip.forEach((relativePath, entry) => {
                     if (entry.dir) return;
                     const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
+                    const pathLower = relativePath.toLowerCase();
                     if ((baseName === "info.yml" || baseName === "info.yaml") && !infoYmlEntry) {
                       infoYmlEntry = entry;
-                    } else if (baseName === "groups.json" && !groupsEntry) {
+                    } else if (
+                      (pathLower === "canvas/groups.json" || baseName === "groups.json") &&
+                      !groupsEntry
+                    ) {
                       groupsEntry = entry;
+                    } else if (
+                      pathLower === "canvas/bookmarks.json" && !bookmarksEntry
+                    ) {
+                      bookmarksEntry = entry;
                     } else if (baseName === "extra.json" && !extraEntry) {
                       extraEntry = entry;
                     } else if (baseName.endsWith(".json") && !chartEntry) {
@@ -150,6 +164,9 @@ export function useMenus(
                   }
                   if (groupsEntry) {
                     groupsJson = await (groupsEntry as JSZip.JSZipObject).async("string");
+                  }
+                  if (bookmarksEntry) {
+                    bookmarksJson = await (bookmarksEntry as JSZip.JSZipObject).async("string");
                   }
                 } else {
                   chartText = await file.text();
@@ -200,6 +217,12 @@ export function useMenus(
                   try {
                     useGroupStore.getState().loadGroupsJson(groupsJson);
                   } catch { /* ignore invalid groups.json */ }
+                }
+
+                if (bookmarksJson) {
+                  try {
+                    useBookmarkStore.getState().loadBookmarksJson(bookmarksJson);
+                  } catch { /* ignore invalid bookmarks.json */ }
                 }
 
                 if (fontEntry) {
@@ -430,7 +453,7 @@ export function useMenus(
         { separator: true, label: "" },
         {
           label: "Create Group from Selection",
-          shortcut: "Ctrl+G",
+          shortcut: "Ctrl+Shift+G",
           disabled: !isLoaded,
           action: () => {
             const es = useEditorStore.getState();
@@ -464,6 +487,17 @@ export function useMenus(
             useEditorStore.getState().toggleImprovisationMode();
           },
         },
+        { separator: true, label: "" },
+        {
+          label: "Create Multiple Lines...",
+          disabled: !isLoaded,
+          action: () => onShowBatchLine?.(),
+        },
+        {
+          label: "Lyrics Sync...",
+          disabled: !isLoaded,
+          action: () => onShowLyricsSync?.(),
+        },
       ],
     },
     {
@@ -494,18 +528,21 @@ export function useMenus(
           },
         },
         { separator: true, label: "" },
-        { label: "Timeline", action: () => onTogglePanel?.("timeline") },
-        { label: "Inspector", action: () => onTogglePanel?.("inspector") },
-        { label: "Line List", action: () => onTogglePanel?.("line-list") },
-        { label: "Toolbar", action: () => onTogglePanel?.("toolbar") },
-        { label: "Timeline Settings", action: () => onTogglePanel?.("timeline-settings") },
-        { label: "BPM List", action: () => onTogglePanel?.("bpm-list") },
-        { label: "Chart Settings", action: () => onTogglePanel?.("chart-settings") },
+        { label: "Timeline", shortcut: "Alt+1", action: () => onTogglePanel?.("timeline") },
+        { label: "Lines", shortcut: "Alt+2", action: () => onTogglePanel?.("line-list") },
+        { label: "Effects", shortcut: "Alt+3", action: () => onTogglePanel?.("effects") },
         { separator: true, label: "" },
-        { label: "Validation", action: () => onTogglePanel?.("validation") },
-        { label: "Effects", action: () => onTogglePanel?.("effects") },
-        { label: "Textures", action: () => onTogglePanel?.("textures") },
-        { label: "Groups", action: () => onTogglePanel?.("group-manager") },
+        { label: "Inspector", action: () => onTogglePanel?.("inspector") },
+        { label: "Toolbar", action: () => onTogglePanel?.("toolbar") },
+        { label: "Timeline Settings", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("timeline-settings") },
+        { label: "BPM List", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("bpm-list") },
+        { label: "Chart Settings", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("chart-settings") },
+        { label: "Validation", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("validation") },
+        { label: "Textures", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("textures") },
+        { label: "Groups", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("group-manager") },
+        { label: "Presets", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("presets") },
+        { label: "Game Preview", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("game-preview") },
+        { label: "Hotkey Reference", action: () => (onShowOnDemandPanel ?? onTogglePanel)?.("hotkey-reference") },
         { separator: true, label: "" },
         { label: "Apply Default Layout", action: onResetLayout },
       ],
@@ -605,6 +642,7 @@ export function useMenus(
 
               const { createPezBundle } = await import("../utils/pezExport");
               const groups = useGroupStore.getState().groups;
+              const bookmarks = useBookmarkStore.getState().bookmarks;
               const pezBlob = await createPezBundle({
                 chart,
                 meta,
@@ -614,6 +652,7 @@ export function useMenus(
                 extraConfig: cs.extraConfig,
                 lineTextures: cs.lineTextures,
                 groups: groups.length > 0 ? groups : null,
+                bookmarks: bookmarks.length > 0 ? bookmarks : null,
               });
 
               const url = URL.createObjectURL(pezBlob);

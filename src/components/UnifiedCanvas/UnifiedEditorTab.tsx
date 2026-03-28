@@ -3,8 +3,8 @@
 //
 // The top-level layout for the unified canvas editor.
 // Composes: Toolbar (left) + LineStrip + Canvas + LineDrawer
-//           + Inspector (right) + Panel Drawer (bottom, toggleable)
-//           + KeyframeBar (bottom) + StatusBar (bottom)
+//           + Inspector (right) + TransportBar + KeyframeBar
+//           + Panel Drawer (bottom, toggleable) + StatusBar
 //
 // This is rendered when the active tab type is "unified_editor".
 // ============================================================
@@ -13,6 +13,7 @@ import { useCallback, useRef } from "react";
 import { Toolbar } from "../Toolbar/Toolbar";
 import { UnifiedCanvas } from "./UnifiedCanvas";
 import { UnifiedInspector } from "./UnifiedInspector";
+import { TransportBar } from "../TransportBar/TransportBar";
 import { KeyframeBar } from "../KeyframeBar/KeyframeBar";
 import { LineStrip } from "../LineStrip/LineStrip";
 import { LineDrawer } from "../LineDrawer/LineDrawer";
@@ -21,6 +22,7 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useGroupStore } from "../../stores/groupStore";
 import { CanvasPanelDrawer } from "./CanvasPanelDrawer";
 import { GroupEditOverlay } from "../GroupManager/GroupEditOverlay";
+import { FloatingInspector } from "./FloatingInspector";
 
 export function UnifiedEditorTab() {
   const canvasActivePanelId = useEditorStore((s) => s.canvasActivePanelId);
@@ -101,7 +103,7 @@ export function UnifiedEditorTab() {
         {/* Left toolbar */}
         <Toolbar />
 
-        {/* Center column: LineStrip + Canvas + LineDrawer overlay + Panel Drawer */}
+        {/* Center column: LineStrip + Canvas + TransportBar + KeyframeBar */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           {/* Line Strip (30px) */}
           <LineStrip />
@@ -111,6 +113,7 @@ export function UnifiedEditorTab() {
             <UnifiedCanvas />
             <LineDrawer />
             {activeGroupId && <GroupEditOverlay />}
+            <FloatingInspector />
           </div>
 
           {/* Bottom panel drawer (toggleable) */}
@@ -122,7 +125,7 @@ export function UnifiedEditorTab() {
                 style={{
                   height: 4,
                   cursor: "ns-resize",
-                  background: "var(--border)",
+                  background: "var(--border-color)",
                   flexShrink: 0,
                 }}
               />
@@ -131,33 +134,36 @@ export function UnifiedEditorTab() {
               </div>
             </>
           )}
+
+          {/* Transport Bar — always visible */}
+          <TransportBar />
+
+          {/* Keyframe bar with resize handle */}
+          {keyframeBarOpen && (
+            <div
+              onMouseDown={handleKbResizeStart}
+              style={{
+                height: 4,
+                cursor: "ns-resize",
+                background: "var(--border-color)",
+                flexShrink: 0,
+              }}
+            />
+          )}
+          <div
+            style={{
+              height: keyframeBarOpen ? keyframeBarHeight : 0,
+              overflow: "hidden",
+              transition: "height 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+              flexShrink: 0,
+            }}
+          >
+            <KeyframeBar />
+          </div>
         </div>
 
         {/* Right: Inspector sidebar */}
         <UnifiedInspector />
-      </div>
-
-      {/* Bottom: Keyframe bar with resize handle */}
-      {keyframeBarOpen && (
-        <div
-          onMouseDown={handleKbResizeStart}
-          style={{
-            height: 4,
-            cursor: "ns-resize",
-            background: "var(--border)",
-            flexShrink: 0,
-          }}
-        />
-      )}
-      <div
-        style={{
-          height: keyframeBarOpen ? keyframeBarHeight : 0,
-          overflow: "hidden",
-          transition: "height 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
-          flexShrink: 0,
-        }}
-      >
-        <KeyframeBar />
       </div>
 
       {/* Bottom: Status bar */}

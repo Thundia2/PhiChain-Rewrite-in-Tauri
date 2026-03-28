@@ -139,3 +139,37 @@ export async function pickFile(
   const result = await window.__TAURI__.dialog.open({ filters });
   return result as string | null;
 }
+
+// ============================================================
+// File-to-blob helpers
+// ============================================================
+
+const MIME_AUDIO: Record<string, string> = { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav", flac: "audio/flac", m4a: "audio/mp4" };
+const MIME_IMAGE: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp" };
+
+/**
+ * Read a file from the filesystem via Tauri's fs plugin and return
+ * a blob object URL. This replaces convertFileSrc which requires the
+ * asset protocol (not configured in this app).
+ */
+export async function readFileAsObjectUrl(
+  filePath: string,
+  mimeMap: Record<string, string> = {},
+): Promise<string> {
+  const { readFile } = await import("@tauri-apps/plugin-fs");
+  const data = await readFile(filePath);
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  const mime = mimeMap[ext] ?? "application/octet-stream";
+  const blob = new Blob([data], { type: mime });
+  return URL.createObjectURL(blob);
+}
+
+/** Shorthand: read an audio file and return a blob URL with correct MIME */
+export function readAudioFileAsUrl(filePath: string): Promise<string> {
+  return readFileAsObjectUrl(filePath, MIME_AUDIO);
+}
+
+/** Shorthand: read an image file and return a blob URL with correct MIME */
+export function readImageFileAsUrl(filePath: string): Promise<string> {
+  return readFileAsObjectUrl(filePath, MIME_IMAGE);
+}

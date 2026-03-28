@@ -8,20 +8,7 @@
 import { useEditorStore } from "../../stores/editorStore";
 import { useChartStore } from "../../stores/chartStore";
 import type { LineEventKind } from "../../types/chart";
-
-export const EVENT_COLORS: Record<LineEventKind, string> = {
-  x: "#ff6b6b",
-  y: "#51cf66",
-  rotation: "#ffd43b",
-  opacity: "#cc5de8",
-  speed: "#4dabf7",
-  scale_x: "#ff922b",
-  scale_y: "#20c997",
-  color: "#e599f7",
-  text: "#a9e34b",
-  incline: "#74c0fc",
-  gif: "#f06595",
-};
+import { EVENT_COLORS } from "../../constants/eventColors";
 
 const CORE_PROPERTIES: { kind: LineEventKind; short: string; full: string }[] = [
   { kind: "x", short: "X", full: "X Position" },
@@ -83,7 +70,7 @@ export function EventEditorToolbar() {
     <div
       className="flex flex-col border-b flex-shrink-0"
       style={{
-        borderColor: "var(--border-primary)",
+        borderColor: "var(--border-color)",
         backgroundColor: "var(--bg-secondary)",
       }}
     >
@@ -95,7 +82,7 @@ export function EventEditorToolbar() {
         </div>
 
         {/* Separator */}
-        <div className="w-px h-4" style={{ backgroundColor: "var(--border-primary)" }} />
+        <div className="w-px h-4" style={{ backgroundColor: "var(--border-color)" }} />
 
         {/* Extended property buttons */}
         <div className="flex gap-1">
@@ -103,7 +90,7 @@ export function EventEditorToolbar() {
         </div>
 
         {/* Separator */}
-        <div className="w-px h-4" style={{ backgroundColor: "var(--border-primary)" }} />
+        <div className="w-px h-4" style={{ backgroundColor: "var(--border-color)" }} />
 
         {/* Toggle: Show All Lines */}
         <label className="flex items-center gap-1 cursor-pointer text-xs">
@@ -140,7 +127,7 @@ export function EventEditorToolbar() {
       {hasLayers && (
         <div
           className="flex items-center gap-1 px-2 py-0.5 border-t"
-          style={{ borderColor: "var(--border-primary)", height: "24px" }}
+          style={{ borderColor: "var(--border-color)", height: "24px" }}
         >
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Layer:</span>
           {[0, 1, 2, 3, 4].map((i) => {

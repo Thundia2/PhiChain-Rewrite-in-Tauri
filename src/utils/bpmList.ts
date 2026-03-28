@@ -52,12 +52,13 @@ export class BpmList {
 
     for (const point of sorted) {
       const beatVal = beatToFloat(point.beat);
-      if (lastBpm !== -1) {
+      const safeBpm = Math.max(point.bpm, Number.EPSILON);
+      if (lastBpm > 0) {
         time += (beatVal - lastBeat) * (60.0 / lastBpm);
       }
       lastBeat = beatVal;
-      lastBpm = point.bpm;
-      this.points.push({ beat: point.beat, bpm: point.bpm, time });
+      lastBpm = safeBpm;
+      this.points.push({ beat: point.beat, bpm: safeBpm, time });
     }
 
     // If no points were given, use a default of 120 BPM
@@ -96,7 +97,7 @@ export class BpmList {
     }
 
     // Time = (point's pre-computed time) + (remaining beats × seconds per beat)
-    return point.time + (beatVal - beatToFloat(point.beat)) * (60.0 / point.bpm);
+    return point.time + (beatVal - beatToFloat(point.beat)) * (60.0 / Math.max(point.bpm, Number.EPSILON));
   }
 
   /**

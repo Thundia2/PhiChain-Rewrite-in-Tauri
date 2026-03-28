@@ -11,6 +11,7 @@ import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import type { LineEventKind } from "../../types/chart";
 import { generateParametricEvents, type ParametricConfig } from "../../utils/parametricTrajectory";
+import { safeParseNumber } from "../common/FormFields";
 
 interface ParametricDialogProps {
   open: boolean;
@@ -234,7 +235,7 @@ export function ParametricDialog({ open, onClose }: ParametricDialogProps) {
                     type="number"
                     step="1"
                     value={amplitude}
-                    onChange={(e) => setAmplitude(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setAmplitude(n); }}
                     style={INPUT_STYLE}
                     onFocus={focusInput}
                     onBlur={blurInput}
@@ -245,7 +246,7 @@ export function ParametricDialog({ open, onClose }: ParametricDialogProps) {
                     type="number"
                     step="0.1"
                     value={frequency}
-                    onChange={(e) => setFrequency(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setFrequency(n); }}
                     style={INPUT_STYLE}
                     onFocus={focusInput}
                     onBlur={blurInput}
@@ -256,7 +257,7 @@ export function ParametricDialog({ open, onClose }: ParametricDialogProps) {
                     type="number"
                     step="0.1"
                     value={phase}
-                    onChange={(e) => setPhase(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setPhase(n); }}
                     style={INPUT_STYLE}
                     onFocus={focusInput}
                     onBlur={blurInput}
@@ -267,7 +268,7 @@ export function ParametricDialog({ open, onClose }: ParametricDialogProps) {
                     type="number"
                     step="1"
                     value={offset}
-                    onChange={(e) => setOffset(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setOffset(n); }}
                     style={INPUT_STYLE}
                     onFocus={focusInput}
                     onBlur={blurInput}
@@ -285,7 +286,7 @@ export function ParametricDialog({ open, onClose }: ParametricDialogProps) {
                     type="number"
                     step="0.25"
                     value={startBeat}
-                    onChange={(e) => setStartBeat(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setStartBeat(n); }}
                     style={INPUT_STYLE}
                     onFocus={focusInput}
                     onBlur={blurInput}
@@ -296,7 +297,7 @@ export function ParametricDialog({ open, onClose }: ParametricDialogProps) {
                     type="number"
                     step="0.25"
                     value={endBeat}
-                    onChange={(e) => setEndBeat(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const n = safeParseNumber(e.target.value); if (n !== null) setEndBeat(n); }}
                     style={INPUT_STYLE}
                     onFocus={focusInput}
                     onBlur={blurInput}

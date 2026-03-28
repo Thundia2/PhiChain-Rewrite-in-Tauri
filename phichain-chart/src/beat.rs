@@ -49,7 +49,10 @@ impl<'de> Deserialize<'de> for Beat {
     where
         D: Deserializer<'de>,
     {
-        let (whole, numer, denom) = Deserialize::deserialize(deserializer)?;
+        let (whole, numer, denom): (i32, i32, i32) = Deserialize::deserialize(deserializer)?;
+        if denom == 0 {
+            return Err(serde::de::Error::custom("Beat denominator must not be zero"));
+        }
         Ok(Beat::new(whole, Rational32::new(numer, denom)))
     }
 }
@@ -133,7 +136,10 @@ impl From<Beat> for Rational32 {
 
 impl From<f32> for Beat {
     fn from(value: f32) -> Self {
-        Self::from(Rational32::from_f32(value).unwrap())
+        if value.is_nan() || value.is_infinite() {
+            return Self::ZERO;
+        }
+        Self::from(Rational32::from_f32(value).unwrap_or(Rational32::ZERO))
     }
 }
 

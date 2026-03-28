@@ -7,6 +7,9 @@ import { useGroupStore } from "../../stores/groupStore";
 import { evaluateLineEventsWithLayers, getFirstAppearanceBeat } from "../../canvas/events";
 import { BpmList } from "../../utils/bpmList";
 import type { LineSortMode } from "../../types/editor";
+import { ActionButton, Badge, SELECT_STYLE } from "../common/UIKit";
+import { LINE_CATEGORY_COLORS, LINE_CATEGORY_LABELS, autoCategorize } from "./lineCategories";
+import { LineContextMenu } from "./LineContextMenu";
 
 /**
  * Subscribe to the current beat, throttled to 100ms to avoid
@@ -49,7 +52,28 @@ export function LineList() {
   const setLineSortMode = useEditorStore((s) => s.setLineSortMode);
   const openLineEventEditor = useTabStore((s) => s.openLineEventEditor);
   const groups = useGroupStore((s) => s.groups);
+  const editLine = useChartStore((s) => s.editLine);
   const currentBeat = useThrottledBeat();
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    lineIndex: number;
+  } | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+
+  // Category counts for filter badges
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { gameplay: 0, visual: 0, text: 0, helper: 0, none: 0 };
+    for (const line of lines) {
+      const cat = line._category;
+      if (cat && counts[cat] !== undefined) {
+        counts[cat]++;
+      } else {
+        counts.none++;
+      }
+    }
+    return counts;
+  }, [lines]);
 
   // Pre-compute line states for active_first mode (avoid double evaluation)
   const sortedData = useMemo(() => {
@@ -86,19 +110,17 @@ export function LineList() {
       {/* Action buttons */}
       <div
         className="flex gap-1 p-1 border-b flex-wrap"
-        style={{ borderColor: "var(--border-primary)" }}
+        style={{ borderColor: "var(--border-color)" }}
       >
-        <button
-          className="px-2 py-0.5 rounded text-xs"
-          style={{ backgroundColor: "var(--bg-active)", color: "var(--text-primary)" }}
+        <ActionButton
+          variant="primary"
           onClick={() => addLine({ name: `Line ${lines.length + 1}` })}
           title="Add line"
         >
           + Add
-        </button>
-        <button
-          className="px-2 py-0.5 rounded text-xs"
-          style={{ backgroundColor: "var(--bg-active)", color: "var(--text-primary)" }}
+        </ActionButton>
+        <ActionButton
+          variant="danger"
           onClick={() => {
             if (selectedLineIndex !== null) {
               removeLine(selectedLineIndex);
@@ -108,12 +130,11 @@ export function LineList() {
           disabled={selectedLineIndex === null}
           title="Remove selected line"
         >
-          - Remove
-        </button>
+          Remove
+        </ActionButton>
         {isChartOrder && selectedLineIndex !== null && selectedLineIndex > 0 && (
-          <button
-            className="px-1 py-0.5 rounded text-xs"
-            style={{ backgroundColor: "var(--bg-active)", color: "var(--text-primary)" }}
+          <ActionButton
+            variant="default"
             onClick={() => {
               reorderLines(selectedLineIndex, selectedLineIndex - 1);
               selectLine(selectedLineIndex - 1);
@@ -121,12 +142,11 @@ export function LineList() {
             title="Move up"
           >
             ▲
-          </button>
+          </ActionButton>
         )}
         {isChartOrder && selectedLineIndex !== null && selectedLineIndex < lines.length - 1 && (
-          <button
-            className="px-1 py-0.5 rounded text-xs"
-            style={{ backgroundColor: "var(--bg-active)", color: "var(--text-primary)" }}
+          <ActionButton
+            variant="default"
             onClick={() => {
               reorderLines(selectedLineIndex, selectedLineIndex + 1);
               selectLine(selectedLineIndex + 1);
@@ -134,16 +154,14 @@ export function LineList() {
             title="Move down"
           >
             ▼
-          </button>
+          </ActionButton>
         )}
         {/* Sort mode selector */}
         <select
-          className="px-1 py-0.5 rounded text-xs ml-auto"
+          className="ml-auto"
           style={{
-            backgroundColor: "var(--bg-active)",
-            color: "var(--text-primary)",
-            border: "1px solid var(--border-primary)",
-            fontSize: "10px",
+            ...SELECT_STYLE,
+            fontSize: 10,
           }}
           value={lineSortMode}
           onChange={(e) => setLineSortMode(e.target.value as LineSortMode)}
@@ -155,6 +173,71 @@ export function LineList() {
         </select>
       </div>
 
+      {/* Category filter bar */}
+      <div
+        className="flex items-center gap-1 px-1 py-0.5 border-b flex-wrap"
+        style={{ borderColor: "var(--border-color)" }}
+      >
+        <button
+          className="px-1.5 py-0 rounded text-xs"
+          style={{
+            backgroundColor: categoryFilter === null ? "var(--bg-active)" : "transparent",
+            color: categoryFilter === null ? "var(--text-primary)" : "var(--text-muted)",
+            border: "none",
+            cursor: "pointer",
+          }}
+          onClick={() => setCategoryFilter(null)}
+          title="Show all lines"
+        >
+          All
+        </button>
+        {(["gameplay", "visual", "text", "helper"] as const).map((cat) => (
+          <button
+            key={cat}
+            className="flex items-center gap-1 px-1 py-0 rounded text-xs"
+            style={{
+              backgroundColor: categoryFilter === cat ? LINE_CATEGORY_COLORS[cat] + "25" : "transparent",
+              color: categoryFilter === cat ? LINE_CATEGORY_COLORS[cat] : "var(--text-muted)",
+              border: categoryFilter === cat ? `1px solid ${LINE_CATEGORY_COLORS[cat]}50` : "1px solid transparent",
+              cursor: "pointer",
+            }}
+            onClick={() => setCategoryFilter(categoryFilter === cat ? null : cat)}
+            title={LINE_CATEGORY_LABELS[cat]}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                backgroundColor: LINE_CATEGORY_COLORS[cat],
+                flexShrink: 0,
+              }}
+            />
+            {categoryCounts[cat]}
+          </button>
+        ))}
+        <button
+          className="ml-auto px-1 py-0 rounded text-xs"
+          style={{
+            color: "var(--text-muted)",
+            border: "none",
+            cursor: "pointer",
+            backgroundColor: "transparent",
+          }}
+          onClick={() => {
+            for (let i = 0; i < lines.length; i++) {
+              if (!lines[i]._category) {
+                const cat = autoCategorize(lines[i]);
+                if (cat) editLine(i, { _category: cat });
+              }
+            }
+          }}
+          title="Auto-categorize lines without a category"
+        >
+          Auto
+        </button>
+      </div>
+
       {/* Line list */}
       <div className="flex-1 overflow-y-auto">
         {lines.length === 0 ? (
@@ -162,7 +245,12 @@ export function LineList() {
             No lines yet
           </div>
         ) : (
-          sortedData.indices.map((idx: number) => {
+          sortedData.indices
+            .filter((idx: number) => {
+              if (categoryFilter === null) return true;
+              return lines[idx]._category === categoryFilter;
+            })
+            .map((idx: number) => {
             const line = lines[idx];
             const isSelected = selectedLineIndex === idx;
             const isVisible = sortedData.lineStates
@@ -170,7 +258,12 @@ export function LineList() {
               : null;
 
             return (
-              <div key={idx}>
+              <div
+                key={idx}
+                style={{
+                  borderBottom: "1px solid var(--border-color)",
+                }}
+              >
                 <button
                   className="flex items-center gap-2 w-full px-2 py-1.5 text-left transition-colors"
                   style={{
@@ -181,20 +274,36 @@ export function LineList() {
                       : "2px solid transparent",
                   }}
                   onClick={() => selectLine(idx)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, lineIndex: idx });
+                  }}
                 >
-                  {/* Visibility indicator (active_first mode) or selection dot */}
-                  {lineSortMode === "active_first" && isVisible !== null ? (
+                  {/* Category dot */}
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      backgroundColor: line._category
+                        ? LINE_CATEGORY_COLORS[line._category]
+                        : "transparent",
+                      border: line._category
+                        ? "none"
+                        : "1px solid var(--text-muted)",
+                      flexShrink: 0,
+                    }}
+                    title={line._category ? LINE_CATEGORY_LABELS[line._category] : "No category"}
+                  />
+                  {/* Visibility indicator (active_first mode) */}
+                  {lineSortMode === "active_first" && isVisible !== null && (
                     <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      className="w-1.5 h-1.5 rounded-full flex-shrink-0"
                       style={{
-                        backgroundColor: isVisible ? "#4ade80" : "#6b7280",
+                        backgroundColor: isVisible ? "var(--success)" : "var(--text-muted)",
                       }}
                       title={isVisible ? "Visible" : "Hidden"}
-                    />
-                  ) : (
-                    <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: isSelected ? "var(--accent-primary)" : "var(--text-muted)" }}
                     />
                   )}
                   <span className="flex-1 truncate" style={{ display: "flex", alignItems: "center", gap: 3 }}>
@@ -213,21 +322,17 @@ export function LineList() {
                 </button>
                 {isSelected && (
                   <div className="pl-6 pr-2 pb-1">
-                    <button
-                      className="px-2 py-0.5 rounded text-xs w-full"
-                      style={{
-                        backgroundColor: "var(--accent-primary)",
-                        color: "white",
-                        fontSize: "10px",
-                      }}
+                    <ActionButton
+                      variant="primary"
                       onClick={(e) => {
                         e.stopPropagation();
                         openLineEventEditor(idx, line.name || `Line ${idx + 1}`);
                       }}
                       title="Open event editor for this line"
+                      style={{ width: "100%", fontSize: 10 }}
                     >
                       Adjust Events
-                    </button>
+                    </ActionButton>
                   </div>
                 )}
               </div>
@@ -235,6 +340,16 @@ export function LineList() {
           })
         )}
       </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <LineContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          lineIndex={contextMenu.lineIndex}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

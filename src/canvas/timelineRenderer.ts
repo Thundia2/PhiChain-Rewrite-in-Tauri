@@ -63,6 +63,12 @@ const SELECTION_COLOR = "#90ee90";
 // Renderer
 // ============================================================
 
+export interface TimelineOverlayLine {
+  notes: Note[];
+  lineIndex: number;
+  color: string;
+}
+
 export interface TimelineRenderParams {
   notes: Note[];
   events: LineEvent[];
@@ -78,6 +84,9 @@ export interface TimelineRenderParams {
   canvasHeight: number;
   dragSelectionRect?: DragSelectionRect | null;
   pendingNote?: PendingNote | null;
+  /** Ghost notes from other lines rendered as overlay */
+  overlayLines?: TimelineOverlayLine[];
+  overlayOpacity?: number;
 }
 
 export class TimelineRenderer {
@@ -193,6 +202,60 @@ export class TimelineRenderer {
           ctx.globalAlpha = 0.25;
           this.drawNote(ctx, cn, cnBeat, false, scrollBeat, zoom, noteAreaLeft, noteAreaWidth, canvasHeight);
           ctx.globalAlpha = 1;
+        }
+      }
+    }
+
+    // ---- Overlay lines (ghost notes from other lines) ----
+    if (params.overlayLines && params.overlayLines.length > 0) {
+      const overlayAlpha = params.overlayOpacity ?? 0.3;
+
+      for (const overlay of params.overlayLines) {
+        for (const note of overlay.notes) {
+          const nBeat = beatToFloat(note.beat);
+          if (nBeat < minBeat - 2 || nBeat > maxBeat + 2) continue;
+
+          const nY = TimelineRenderer.beatToY(nBeat, scrollBeat, zoom, canvasHeight);
+          const nX = TimelineRenderer.noteXToPixel(note.x, noteAreaLeft, noteAreaWidth);
+
+          ctx.save();
+          ctx.globalAlpha = overlayAlpha;
+          ctx.setLineDash([3, 3]);
+
+          // Draw note with overlay line's color
+          ctx.strokeStyle = overlay.color;
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(
+            nX - NOTE_TL_WIDTH / 2,
+            nY - NOTE_TL_HEIGHT / 2,
+            NOTE_TL_WIDTH,
+            NOTE_TL_HEIGHT,
+          );
+
+          // Fill with desaturated version
+          ctx.fillStyle = overlay.color;
+          ctx.globalAlpha = overlayAlpha * 0.3;
+          ctx.fillRect(
+            nX - NOTE_TL_WIDTH / 2,
+            nY - NOTE_TL_HEIGHT / 2,
+            NOTE_TL_WIDTH,
+            NOTE_TL_HEIGHT,
+          );
+
+          // Hold note body
+          if (note.kind === "hold" && note.hold_beat) {
+            const holdEnd = nBeat + beatToFloat(note.hold_beat);
+            const holdEndY = TimelineRenderer.beatToY(holdEnd, scrollBeat, zoom, canvasHeight);
+            ctx.globalAlpha = overlayAlpha * 0.4;
+            ctx.fillRect(
+              nX - HOLD_TL_WIDTH / 2,
+              Math.min(nY, holdEndY),
+              HOLD_TL_WIDTH,
+              Math.abs(holdEndY - nY),
+            );
+          }
+
+          ctx.restore();
         }
       }
     }

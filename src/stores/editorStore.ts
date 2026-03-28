@@ -79,10 +79,41 @@ export interface EditorState {
 
   // ---- Improvisation mode ----
   improvisationMode: boolean;
-  improvisationNoteKind: NoteKind;
 
   // ---- Multi-line selection (batch editing) ----
   multiSelectedLineIndices: number[];
+
+  // ---- Curve Editor state ----
+  curveEditorExpanded: boolean;
+  curveEditorHeight: number;
+  curveEditorVisibleLanes: LineEventKind[];
+  curveEditorPoppedOut: boolean;
+  curveEditorValueRange: { min: number; max: number } | null;
+  curveEditorNormalized: boolean;
+  curveEditorHoveredKeyframe: {
+    eventIndex: number;
+    kind: LineEventKind;
+    handle: "start" | "end";
+  } | null;
+  curveEditorDragState: {
+    eventIndex: number;
+    kind: LineEventKind;
+    handle: "start" | "end";
+    startMouseX: number;
+    startMouseY: number;
+    startBeat: number;
+    startValue: number;
+  } | null;
+
+  // ---- Record Mode ----
+  recordMode: boolean;
+  recordModeChannels: { x: boolean; y: boolean; rotation: boolean };
+  recordedKeyframes: Array<{
+    beat: number;
+    x?: number;
+    y?: number;
+    rotation?: number;
+  }>;
 
   // ---- Unified Canvas state ----
   canvasInteractionMode:
@@ -104,8 +135,30 @@ export interface EditorState {
   unifiedInspectorOpen: boolean;
   canvasActivePanelId: PanelId | null;  // Active bottom panel in canvas mode
   canvasPanelHeight: number;            // Height of the bottom panel drawer
+  onDemandOverlayPanelId: PanelId | null; // On-demand panel overlaying the drawer
   keyframeBarOpen: boolean;
   keyframeBarHeight: number;            // 50-200px range, default 90
+
+  // ---- LineStrip filter ----
+  lineStripSearchQuery: string;
+  lineStripSearchOpen: boolean;
+  lineStripCategoryFilter: string[] | null; // null = show all
+
+  // ---- Timeline overlay ----
+  timelineOverlayLines: number[];
+  timelineOverlayEnabled: boolean;
+  timelineOverlayOpacity: number;
+
+  // ---- Floating inspector ----
+  floatingInspector: {
+    screenX: number;
+    screenY: number;
+    targetType: "note" | "event" | "multi_note" | "multi_event";
+  } | null;
+
+  // ---- Pattern tool ghost notes ----
+  patternGhostNotes: Array<{ x: number; beat: number; kind: string; above: boolean }>;
+  setPatternGhostNotes: (notes: Array<{ x: number; beat: number; kind: string; above: boolean }>) => void;
 
   // ---- Selection actions ----
   selectLine: (index: number | null) => void;
@@ -158,12 +211,28 @@ export interface EditorState {
 
   // ---- Improvisation mode actions ----
   toggleImprovisationMode: () => void;
-  setImprovisationNoteKind: (kind: NoteKind) => void;
 
   // ---- Multi-line selection actions ----
   setMultiSelectedLines: (indices: number[]) => void;
   toggleMultiSelectedLine: (index: number) => void;
   clearMultiSelectedLines: () => void;
+
+  // ---- Curve Editor actions ----
+  toggleCurveEditorExpanded: () => void;
+  setCurveEditorHeight: (height: number) => void;
+  setCurveEditorVisibleLanes: (lanes: LineEventKind[]) => void;
+  toggleCurveEditorLane: (lane: LineEventKind) => void;
+  setCurveEditorPoppedOut: (poppedOut: boolean) => void;
+  setCurveEditorValueRange: (range: { min: number; max: number } | null) => void;
+  toggleCurveEditorNormalized: () => void;
+  setCurveEditorHoveredKeyframe: (kf: EditorState["curveEditorHoveredKeyframe"]) => void;
+  setCurveEditorDragState: (state: EditorState["curveEditorDragState"]) => void;
+
+  // ---- Record Mode actions ----
+  toggleRecordMode: () => void;
+  setRecordModeChannels: (channels: Partial<EditorState["recordModeChannels"]>) => void;
+  addRecordedKeyframe: (kf: { beat: number; x?: number; y?: number; rotation?: number }) => void;
+  clearRecordedKeyframes: () => void;
 
   // ---- Unified Canvas actions ----
   setCanvasInteractionMode: (mode: EditorState["canvasInteractionMode"]) => void;
@@ -173,8 +242,26 @@ export interface EditorState {
   toggleLineLocked: (index: number) => void;
   toggleLineDrawer: () => void;
   toggleUnifiedInspector: () => void;
+  // ---- Timeline overlay actions ----
+  setTimelineOverlayLines: (indices: number[]) => void;
+  toggleTimelineOverlayLine: (index: number) => void;
+  toggleTimelineOverlay: () => void;
+  setTimelineOverlayOpacity: (opacity: number) => void;
+
+  // ---- Floating inspector actions ----
+  showFloatingInspector: (screenX: number, screenY: number,
+    targetType: "note" | "event" | "multi_note" | "multi_event") => void;
+  hideFloatingInspector: () => void;
+
+  // ---- LineStrip filter actions ----
+  setLineStripSearch: (query: string) => void;
+  toggleLineStripSearch: () => void;
+  setLineStripCategoryFilter: (filter: string[] | null) => void;
+  toggleLineStripCategory: (category: string) => void;
+
   setCanvasActivePanel: (panelId: PanelId | null) => void;
   toggleCanvasPanel: (panelId: PanelId) => void;
+  setOnDemandOverlay: (panelId: PanelId | null) => void;
   setCanvasPanelHeight: (height: number) => void;
   toggleKeyframeBar: () => void;
   setKeyframeBarHeight: (height: number) => void;
@@ -210,10 +297,40 @@ export const useEditorStore = create<EditorState>()((set) => ({
 
   // ---- Improvisation mode ----
   improvisationMode: false,
-  improvisationNoteKind: "tap",
 
   // ---- Multi-line selection ----
   multiSelectedLineIndices: [],
+
+  // ---- Curve Editor ----
+  curveEditorExpanded: false,
+  curveEditorHeight: 250,
+  curveEditorVisibleLanes: ["x", "y", "rotation", "opacity", "speed"] as LineEventKind[],
+  curveEditorPoppedOut: false,
+  curveEditorValueRange: null,
+  curveEditorNormalized: false,
+  curveEditorHoveredKeyframe: null,
+  curveEditorDragState: null,
+
+  // ---- Record Mode ----
+  recordMode: false,
+  recordModeChannels: { x: true, y: true, rotation: false },
+  recordedKeyframes: [],
+
+  // ---- Timeline overlay ----
+  timelineOverlayLines: [],
+  timelineOverlayEnabled: false,
+  timelineOverlayOpacity: 0.3,
+
+  // ---- Floating inspector ----
+  floatingInspector: null,
+
+  // ---- Pattern tool ghost notes ----
+  patternGhostNotes: [],
+
+  // ---- LineStrip filter ----
+  lineStripSearchQuery: "",
+  lineStripSearchOpen: false,
+  lineStripCategoryFilter: null,
 
   // ---- Unified Canvas ----
   canvasInteractionMode: "idle",
@@ -224,6 +341,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
   unifiedInspectorOpen: true,
   canvasActivePanelId: null,
   canvasPanelHeight: 250,
+  onDemandOverlayPanelId: null,
   keyframeBarOpen: true,
   keyframeBarHeight: 90,
 
@@ -331,8 +449,9 @@ export const useEditorStore = create<EditorState>()((set) => ({
   toggleBeatSyncPlacement: () => set((s) => ({ beatSyncPlacement: !s.beatSyncPlacement })),
 
   // ---- Improvisation mode ----
-  toggleImprovisationMode: () => set((s) => ({ improvisationMode: !s.improvisationMode })),
-  setImprovisationNoteKind: (kind) => set({ improvisationNoteKind: kind }),
+  toggleImprovisationMode: () => set((s) => ({
+    improvisationMode: !s.improvisationMode,
+  })),
 
   // ---- Multi-line selection ----
   setMultiSelectedLines: (indices) => set({ multiSelectedLineIndices: indices }),
@@ -346,6 +465,68 @@ export const useEditorStore = create<EditorState>()((set) => ({
       return { multiSelectedLineIndices: [...existing, index] };
     }),
   clearMultiSelectedLines: () => set({ multiSelectedLineIndices: [] }),
+
+  // ---- Curve Editor ----
+  toggleCurveEditorExpanded: () => set((s) => ({ curveEditorExpanded: !s.curveEditorExpanded })),
+  setCurveEditorHeight: (height) => set({ curveEditorHeight: Math.max(150, Math.min(500, height)) }),
+  setCurveEditorVisibleLanes: (lanes) => set({ curveEditorVisibleLanes: lanes }),
+  toggleCurveEditorLane: (lane) => set((s) => {
+    const lanes = s.curveEditorVisibleLanes;
+    if (lanes.includes(lane)) {
+      return { curveEditorVisibleLanes: lanes.filter((l) => l !== lane) };
+    }
+    return { curveEditorVisibleLanes: [...lanes, lane] };
+  }),
+  setCurveEditorPoppedOut: (poppedOut) => set({ curveEditorPoppedOut: poppedOut }),
+  setCurveEditorValueRange: (range) => set({ curveEditorValueRange: range }),
+  toggleCurveEditorNormalized: () => set((s) => ({ curveEditorNormalized: !s.curveEditorNormalized })),
+  setCurveEditorHoveredKeyframe: (kf) => set({ curveEditorHoveredKeyframe: kf }),
+  setCurveEditorDragState: (state) => set({ curveEditorDragState: state }),
+
+  // ---- Record Mode ----
+  toggleRecordMode: () => set((s) => ({ recordMode: !s.recordMode, recordedKeyframes: s.recordMode ? s.recordedKeyframes : [] })),
+  setRecordModeChannels: (channels) => set((s) => ({ recordModeChannels: { ...s.recordModeChannels, ...channels } })),
+  addRecordedKeyframe: (kf) => set((s) => ({ recordedKeyframes: [...s.recordedKeyframes, kf] })),
+  clearRecordedKeyframes: () => set({ recordedKeyframes: [], recordMode: false }),
+
+  // ---- Timeline overlay ----
+  setTimelineOverlayLines: (indices) => set({ timelineOverlayLines: indices }),
+  toggleTimelineOverlayLine: (index) => set((s) => {
+    const lines = s.timelineOverlayLines;
+    if (lines.includes(index)) {
+      return { timelineOverlayLines: lines.filter((i) => i !== index) };
+    }
+    return { timelineOverlayLines: [...lines, index] };
+  }),
+  toggleTimelineOverlay: () => set((s) => ({ timelineOverlayEnabled: !s.timelineOverlayEnabled })),
+  setTimelineOverlayOpacity: (opacity) => set({ timelineOverlayOpacity: Math.max(0, Math.min(1, opacity)) }),
+
+  // ---- Floating inspector ----
+  showFloatingInspector: (screenX, screenY, targetType) => set({
+    floatingInspector: { screenX, screenY, targetType },
+  }),
+  hideFloatingInspector: () => set({ floatingInspector: null }),
+  setPatternGhostNotes: (notes) => set({ patternGhostNotes: notes }),
+
+  // ---- LineStrip filter ----
+  setLineStripSearch: (query) => set({ lineStripSearchQuery: query }),
+  toggleLineStripSearch: () => set((s) => ({
+    lineStripSearchOpen: !s.lineStripSearchOpen,
+    lineStripSearchQuery: s.lineStripSearchOpen ? "" : s.lineStripSearchQuery,
+  })),
+  setLineStripCategoryFilter: (filter) => set({ lineStripCategoryFilter: filter }),
+  toggleLineStripCategory: (category) => set((s) => {
+    const current = s.lineStripCategoryFilter;
+    if (!current) {
+      // No filter active — start filtering with only this category
+      return { lineStripCategoryFilter: [category] };
+    }
+    if (current.includes(category)) {
+      const next = current.filter((c) => c !== category);
+      return { lineStripCategoryFilter: next.length === 0 ? null : next };
+    }
+    return { lineStripCategoryFilter: [...current, category] };
+  }),
 
   // ---- Unified Canvas ----
   setCanvasInteractionMode: (mode) => set({ canvasInteractionMode: mode }),
@@ -365,6 +546,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
   toggleCanvasPanel: (panelId) => set((s) => ({
     canvasActivePanelId: s.canvasActivePanelId === panelId ? null : panelId,
   })),
+  setOnDemandOverlay: (panelId) => set({ onDemandOverlayPanelId: panelId }),
   setCanvasPanelHeight: (height) => set({ canvasPanelHeight: Math.max(100, Math.min(600, height)) }),
   toggleKeyframeBar: () => set((s) => ({ keyframeBarOpen: !s.keyframeBarOpen })),
   setKeyframeBarHeight: (height) => set({ keyframeBarHeight: Math.max(50, Math.min(200, height)) }),

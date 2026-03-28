@@ -11,6 +11,9 @@ export function MenuBar({
   onOpenSettings,
   onOpenCommandPalette,
   onShowParametric,
+  onShowBatchLine,
+  onShowLyricsSync,
+  onShowOnDemandPanel,
 }: {
   onTogglePanel?: (id: PanelId) => void;
   onResetLayout?: () => void;
@@ -18,8 +21,11 @@ export function MenuBar({
   onOpenSettings?: () => void;
   onOpenCommandPalette?: () => void;
   onShowParametric?: () => void;
+  onShowBatchLine?: () => void;
+  onShowLyricsSync?: () => void;
+  onShowOnDemandPanel?: (id: PanelId) => void;
 }) {
-  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric);
+  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel);
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 

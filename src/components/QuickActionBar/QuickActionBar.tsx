@@ -1,9 +1,11 @@
 import { useAudioStore } from "../../stores/audioStore";
 import { useChartStore } from "../../stores/chartStore";
+import { audioEngine } from "../../audio/audioEngine";
 import { beatToFloat } from "../../types/chart";
 import { BpmList } from "../../utils/bpmList";
 import { useMemo } from "react";
 import { Tooltip } from "../common/Tooltip";
+import { Pill } from "../common/UIKit";
 
 // ============================================================
 // CONFIGURABLE: Available playback speed presets
@@ -20,7 +22,6 @@ export function QuickActionBar() {
   const playbackRate = useAudioStore((s) => s.playbackRate);
   const metronomeEnabled = useAudioStore((s) => s.metronomeEnabled);
   const togglePlayPause = useAudioStore((s) => s.togglePlayPause);
-  const stop = useAudioStore((s) => s.stop);
   const seek = useAudioStore((s) => s.seek);
   const setPlaybackRate = useAudioStore((s) => s.setPlaybackRate);
   const toggleMetronome = useAudioStore((s) => s.toggleMetronome);
@@ -84,7 +85,7 @@ export function QuickActionBar() {
           <button
             className="w-7 h-6 flex items-center justify-center rounded text-xs hover:bg-white/10 transition-colors"
             style={{ color: "var(--text-primary)" }}
-            onClick={stop}
+            onClick={() => audioEngine.stop()}
           >
             ⏹
           </button>
@@ -98,17 +99,13 @@ export function QuickActionBar() {
       <div className="flex items-center gap-1.5">
         <span className="text-xs" style={{ color: "var(--text-secondary)" }}>Speed:</span>
         {SPEED_PRESETS.map((s) => (
-          <button
+          <Pill
             key={s}
-            className="px-1.5 py-0.5 rounded text-xs transition-colors"
-            style={{
-              backgroundColor: playbackRate === s ? "var(--accent-primary)" : "transparent",
-              color: playbackRate === s ? "white" : "var(--text-secondary)",
-            }}
+            active={playbackRate === s}
             onClick={() => setPlaybackRate(s)}
           >
             {s}x
-          </button>
+          </Pill>
         ))}
       </div>
 

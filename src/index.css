@@ -44,6 +44,12 @@
   /* Borders */
   --border-color: #2a2a35;
   --border-active: #6c8aff;
+
+  /* Status colors */
+  --error: #ff4a6a;
+  --warning: #ffd43b;
+  --success: #4aff7a;
+  --info: #4dabf7;
 }
 
 /* ============================================================

@@ -138,6 +138,11 @@ interface RpeTextEvent {
   endTime: [number, number, number];
   start: string;
   end: string;
+  easingType?: number;
+  easingLeft?: number;
+  easingRight?: number;
+  bezier?: number;
+  bezierPoints?: [number, number, number, number];
   linkgroup?: number;
   font?: string;  // Custom font name (v152+)
 }
@@ -158,7 +163,7 @@ interface RpeControlEntry {
 // RPE → Phichain Easing Mapping
 // ============================================================
 
-const RPE_EASING_MAP: Record<number, EasingType> = {
+export const RPE_EASING_MAP: Record<number, EasingType> = {
   0: "linear",
   1: "linear",
   2: "ease_out_sine",
@@ -317,12 +322,37 @@ function convertRpeColorEvent(rEvent: RpeColorEvent): LineEvent {
 }
 
 function convertRpeTextEvent(rEvent: RpeTextEvent): LineEvent {
+  // Compute easing (same logic as regular events)
+  let easing: EasingType = "linear";
+  if (rEvent.bezier === 1 && rEvent.bezierPoints) {
+    easing = { custom: rEvent.bezierPoints };
+  } else {
+    easing = RPE_EASING_MAP[rEvent.easingType ?? 1] ?? "linear";
+  }
+
+  const sameText = rEvent.start === rEvent.end;
+  const hasNonLinearEasing = rEvent.easingType != null && rEvent.easingType > 1;
+  const hasBezier = rEvent.bezier === 1 && rEvent.bezierPoints != null;
+  const hasEasingClip = (rEvent.easingLeft != null && rEvent.easingLeft !== 0) ||
+    (rEvent.easingRight != null && rEvent.easingRight !== 1);
+  const hasEasing = hasNonLinearEasing || hasBezier || hasEasingClip;
+
+  const value: LineEventValue = (sameText && !hasEasing)
+    ? { text_value: rEvent.start }
+    : { text_transition: { start: rEvent.start, end: rEvent.end, easing } };
+
   const event: LineEvent = {
     kind: "text",
     start_beat: rEvent.startTime as Beat,
     end_beat: rEvent.endTime as Beat,
-    value: { text_value: rEvent.start },
+    value,
   };
+  if (rEvent.easingLeft != null && rEvent.easingLeft !== 0) {
+    event.easing_left = rEvent.easingLeft;
+  }
+  if (rEvent.easingRight != null && rEvent.easingRight !== 1) {
+    event.easing_right = rEvent.easingRight;
+  }
   if (rEvent.linkgroup != null) {
     event.linkgroup = rEvent.linkgroup;
   }
@@ -553,12 +583,13 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
 // Unknown Field Detection
 // ============================================================
 
-const KNOWN_CHART_KEYS = new Set(["BPMList", "META", "judgeLineList", "judgeLineGroup"]);
+const KNOWN_CHART_KEYS = new Set(["BPMList", "META", "judgeLineList", "judgeLineGroup", "chartTime", "multiLineString", "multiScale"]);
 const KNOWN_META_KEYS = new Set(["RPEVersion", "name", "composer", "charter", "level", "illustrator", "offset", "background", "song", "illustration", "id", "duration"]);
 const KNOWN_LINE_KEYS = new Set([
   "Name", "notes", "eventLayers", "father", "zOrder", "isCover", "bpmfactor",
   "Group", "Texture", "anchor", "rotateWithFather", "attachUI", "isGif",
   "extended", "posControl", "alphaControl", "sizeControl", "skewControl", "yControl",
+  "numOfNotes",
 ]);
 const KNOWN_NOTE_KEYS = new Set([
   "type", "positionX", "above", "startTime", "endTime", "speed", "size",
@@ -571,6 +602,7 @@ const KNOWN_EVENT_KEYS = new Set([
 ]);
 const KNOWN_TEXT_EVENT_KEYS = new Set([
   "startTime", "endTime", "start", "end", "linkgroup", "font",
+  "easingType", "easingLeft", "easingRight", "bezier", "bezierPoints",
 ]);
 const KNOWN_EVENT_LAYER_KEYS = new Set([
   "moveXEvents", "moveYEvents", "rotateEvents", "alphaEvents", "speedEvents",

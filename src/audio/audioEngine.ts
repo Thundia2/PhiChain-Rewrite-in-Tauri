@@ -17,6 +17,7 @@ class AudioEngine {
   private rafId = 0;
   private _loaded = false;
   private _volume = 1.0;
+  private _soundId: number | null = null;
 
   /** For timer-based playback when no audio is loaded */
   private lastFrameTime = 0;
@@ -33,6 +34,16 @@ class AudioEngine {
    *                 since they have no file extension for Howler to detect from.
    */
   load(src: string, format?: string): Promise<void> {
+    return this._loadWithMode(src, format, true).catch(() => {
+      // HTML5 audio failed (e.g. MEDIA_ERR_SRC_NOT_SUPPORTED / code 4).
+      // Retry with Web Audio API decoding which handles more MP3 variants.
+      console.warn("[AudioEngine] HTML5 audio failed, retrying with Web Audio API decode…");
+      return this._loadWithMode(src, format, false);
+    });
+  }
+
+  /** Internal: attempt to load with the given html5 mode. */
+  private _loadWithMode(src: string, format: string | undefined, html5: boolean): Promise<void> {
     return new Promise((resolve, reject) => {
       this.unload();
 
@@ -42,7 +53,7 @@ class AudioEngine {
       this.howl = new Howl({
         src: [src],
         ...(format ? { format: [format] } : {}),
-        html5: true, // Stream from disk — don't decode entire file into memory
+        html5, // true = stream via <audio>; false = full decode via Web Audio API
         preload: true,
         volume: this._volume * this._volume * this._volume,
         onload: () => {
@@ -70,6 +81,7 @@ class AudioEngine {
       this.howl.unload();
       this.howl = null;
     }
+    this._soundId = null;
     this._loaded = false;
     const store = useAudioStore.getState();
     store.setDuration(0);
@@ -80,8 +92,12 @@ class AudioEngine {
   /** Start or resume playback */
   play(): void {
     if (this.howl && this._loaded) {
-      this.howl.play();
-      this.howl.rate(useAudioStore.getState().playbackRate);
+      if (this._soundId !== null) {
+        this.howl.play(this._soundId);
+      } else {
+        this._soundId = this.howl.play();
+      }
+      this.howl.rate(useAudioStore.getState().playbackRate, this._soundId!);
     }
     this.lastFrameTime = performance.now();
     useAudioStore.getState().play();
@@ -90,8 +106,8 @@ class AudioEngine {
 
   /** Pause playback */
   pause(): void {
-    if (this.howl) {
-      this.howl.pause();
+    if (this.howl && this._soundId !== null) {
+      this.howl.pause(this._soundId);
     }
     useAudioStore.getState().pause();
     this.stopTimeSync();
@@ -109,7 +125,12 @@ class AudioEngine {
   /** Stop playback and reset to beginning */
   stop(): void {
     if (this.howl) {
-      this.howl.stop();
+      if (this._soundId !== null) {
+        this.howl.stop(this._soundId);
+      } else {
+        this.howl.stop();
+      }
+      this._soundId = null;
     }
     useAudioStore.getState().stop();
     this.stopTimeSync();
@@ -118,7 +139,7 @@ class AudioEngine {
   /** Seek to a specific time in seconds */
   seek(time: number): void {
     if (this.howl) {
-      this.howl.seek(time);
+      this.howl.seek(time, this._soundId ?? undefined);
     }
     useAudioStore.getState().setCurrentTime(time);
   }
@@ -127,7 +148,7 @@ class AudioEngine {
   setRate(rate: number): void {
     const clamped = Math.max(0.25, Math.min(2.0, rate));
     if (this.howl) {
-      this.howl.rate(clamped);
+      this.howl.rate(clamped, this._soundId ?? undefined);
     }
     // Use internal setter to avoid circular call:
     // setPlaybackRate → setRate → setPlaybackRate → ...
@@ -145,7 +166,7 @@ class AudioEngine {
     this._volume = linear;
     const actual = linear * linear * linear;
     if (this.howl) {
-      this.howl.volume(actual);
+      this.howl.volume(actual, this._soundId ?? undefined);
     }
   }
 

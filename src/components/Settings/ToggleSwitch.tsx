@@ -10,8 +10,8 @@ export function ToggleSwitch({ checked, onChange }: Props) {
       aria-checked={checked}
       className="relative inline-flex items-center rounded-full transition-colors"
       style={{
-        width: 36,
-        height: 20,
+        width: 32,
+        height: 18,
         backgroundColor: checked ? "var(--accent-primary)" : "var(--bg-active)",
       }}
       onClick={() => onChange(!checked)}
@@ -19,9 +19,9 @@ export function ToggleSwitch({ checked, onChange }: Props) {
       <span
         className="inline-block rounded-full bg-white transition-transform"
         style={{
-          width: 14,
-          height: 14,
-          transform: checked ? "translateX(18px)" : "translateX(3px)",
+          width: 12,
+          height: 12,
+          transform: checked ? "translateX(17px)" : "translateX(3px)",
         }}
       />
     </button>

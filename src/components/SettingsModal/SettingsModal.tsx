@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { useBookmarkStore } from "../../stores/bookmarkStore";
 import { useRespackStore } from "../../stores/respackStore";
 import { useToastStore } from "../../stores/toastStore";
 import { ToggleSwitch } from "../Settings/ToggleSwitch";
+import { Card, SectionHeader as SH, ActionButton } from "../common/UIKit";
 
 type Category = "general" | "audio" | "game-preview" | "timeline" | "editor" | "resource-pack" | "notifications";
 
@@ -18,19 +20,8 @@ const CATEGORIES: { id: Category; label: string }[] = [
 
 /* ── Reusable sub-components ── */
 
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        backgroundColor: "var(--bg-active)",
-        borderRadius: 10,
-        overflow: "hidden",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
+// Card and SectionHeader imported from UIKit
+const SectionHeader = SH;
 
 function CardRow({
   label,
@@ -58,22 +49,6 @@ function CardRow({
         )}
       </div>
       <div className="flex-shrink-0 ml-3">{children}</div>
-    </div>
-  );
-}
-
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 11,
-        textTransform: "uppercase",
-        letterSpacing: "0.5px",
-        color: "var(--text-muted)",
-        marginBottom: 10,
-      }}
-    >
-      {children}
     </div>
   );
 }
@@ -336,8 +311,50 @@ function TimelineContent() {
 function EditorContent() {
   const settings = useSettingsStore();
   const update = settings.updateSettings;
+  const latencyOffset = useBookmarkStore((s) => s.latencyOffset);
+  const setLatencyOffset = useBookmarkStore((s) => s.setLatencyOffset);
+  const visibilityRange = useBookmarkStore((s) => s.visibilityRange);
+  const setVisibilityRange = useBookmarkStore((s) => s.setVisibilityRange);
+
   return (
     <div className="flex flex-col gap-5">
+      <div>
+        <SectionHeader>Mark Mode</SectionHeader>
+        <Card>
+          <CardRow label="Latency offset" description="Shifts markers back to compensate for reaction time">
+            <div className="flex items-center gap-1">
+              <input
+                type="range"
+                min={-100}
+                max={0}
+                step={5}
+                value={latencyOffset}
+                onChange={(e) => setLatencyOffset(parseInt(e.target.value))}
+                style={{ width: 80 }}
+              />
+              <span style={{ color: "var(--text-muted)", fontSize: 10, minWidth: 36, textAlign: "right" }}>
+                {latencyOffset}ms
+              </span>
+            </div>
+          </CardRow>
+          <CardRow label="Visibility range" description="How far from playhead bookmarks stay visible" last>
+            <div className="flex items-center gap-1">
+              <input
+                type="range"
+                min={0.5}
+                max={8.0}
+                step={0.5}
+                value={visibilityRange}
+                onChange={(e) => setVisibilityRange(parseFloat(e.target.value))}
+                style={{ width: 80 }}
+              />
+              <span style={{ color: "var(--text-muted)", fontSize: 10, minWidth: 36, textAlign: "right" }}>
+                {visibilityRange.toFixed(1)}b
+              </span>
+            </div>
+          </CardRow>
+        </Card>
+      </div>
       <div>
         <SectionHeader>Event Editor</SectionHeader>
         <Card>
@@ -457,42 +474,14 @@ function ResourcePackContent() {
       )}
 
       <div className="flex items-center gap-2 mt-3">
-        <button
-          style={{
-            padding: "6px 14px",
-            borderRadius: 6,
-            fontSize: 11,
-            backgroundColor: "var(--accent-primary)",
-            color: "#fff",
-            border: "none",
-            cursor: "pointer",
-            transition: "opacity 0.12s",
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.85"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
-          onClick={handleImport}
-        >
+        <ActionButton variant="primary" onClick={handleImport}>
           Import Respack
-        </button>
+        </ActionButton>
 
         {activeRespack && (
-          <button
-            style={{
-              padding: "6px 14px",
-              borderRadius: 6,
-              fontSize: 11,
-              color: "#ff4060",
-              border: "1px solid #ff4060",
-              backgroundColor: "transparent",
-              cursor: "pointer",
-              transition: "opacity 0.12s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.85"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
-            onClick={() => handleDelete(activeRespack.id, activeRespack.config.name)}
-          >
+          <ActionButton variant="danger" onClick={() => handleDelete(activeRespack.id, activeRespack.config.name)}>
             Delete
-          </button>
+          </ActionButton>
         )}
       </div>
     </div>
@@ -520,23 +509,9 @@ function NotificationsContent() {
       <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
         <SectionHeader>Notification History</SectionHeader>
         {history.length > 0 && (
-          <button
-            style={{
-              padding: "4px 12px",
-              borderRadius: 6,
-              fontSize: 11,
-              color: "#ff4060",
-              border: "1px solid #ff4060",
-              backgroundColor: "transparent",
-              cursor: "pointer",
-              transition: "opacity 0.12s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.85"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
-            onClick={clearHistory}
-          >
+          <ActionButton variant="danger" onClick={clearHistory}>
             Clear History
-          </button>
+          </ActionButton>
         )}
       </div>
 

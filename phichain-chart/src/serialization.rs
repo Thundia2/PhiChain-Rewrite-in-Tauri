@@ -141,7 +141,7 @@ impl Default for SerializedLine {
                 },
                 LineEvent {
                     kind: LineEventKind::Opacity,
-                    value: LineEventValue::constant(0.0),
+                    value: LineEventValue::constant(255.0),
                     start_beat: Beat::ZERO,
                     end_beat: Beat::ONE,
                 },

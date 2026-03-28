@@ -64,13 +64,13 @@ impl BpmList {
     pub fn compute(&mut self) {
         let mut time = 0.0;
         let mut last_beat = 0.0;
-        let mut last_bpm = -1.0;
+        let mut last_bpm = -1.0_f32;
         for point in &mut self.0 {
-            if last_bpm != -1.0 {
+            if last_bpm > 0.0 {
                 time += (point.beat.value() - last_beat) * (60.0 / last_bpm);
             }
             last_beat = point.beat.value();
-            last_bpm = point.bpm;
+            last_bpm = point.bpm.max(f32::EPSILON);
             point.time = time;
         }
     }
@@ -97,7 +97,7 @@ impl BpmList {
             .or_else(|| self.0.first())
             .expect("No bpm points available");
 
-        point.time + (beat.value() - point.beat.value()) * (60.0 / point.bpm)
+        point.time + (beat.value() - point.beat.value()) * (60.0 / point.bpm.max(f32::EPSILON))
     }
 
     pub fn beat_at(&self, time: f32) -> Beat {

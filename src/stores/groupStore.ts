@@ -722,7 +722,11 @@ export const useGroupStore = create<GroupState>()((set, get) => ({
 
   loadGroupsJson: (json) => {
     try {
-      const raw = JSON.parse(json) as any[];
+      const raw = JSON.parse(json);
+      if (!Array.isArray(raw)) {
+        console.error("Failed to load groups: expected an array");
+        return;
+      }
       const groups = raw.map(migrateGroup);
       set({ groups });
     } catch (e) {

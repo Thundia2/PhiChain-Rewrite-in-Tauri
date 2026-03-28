@@ -5,6 +5,8 @@
 //   - chart.json (RPE format)
 //   - music.mp3 (or other audio format)
 //   - bg.png (or other image format)
+//   - Canvas/groups.json (editor groups, if any)
+//   - Canvas/bookmarks.json (improv bookmarks, if any)
 //
 // This creates a .pez file that can be shared with Phira/RPE users.
 // ============================================================
@@ -13,6 +15,7 @@ import JSZip from "jszip";
 import type { PhichainChart, ProjectMeta } from "../types/chart";
 import type { ExtraConfig } from "../types/extra";
 import type { EditorGroup } from "../types/group";
+import type { Bookmark } from "../types/bookmark";
 import { convertPhichainToRpe } from "./rpeExport";
 
 export interface PezExportOptions {
@@ -28,8 +31,10 @@ export interface PezExportOptions {
   extraConfig?: ExtraConfig | null;
   /** Line texture images — Map from filename to Blob */
   lineTextures?: Map<string, Blob> | null;
-  /** Editor groups — included as groups.json if non-empty */
+  /** Editor groups — included in Canvas/groups.json if non-empty */
   groups?: EditorGroup[] | null;
+  /** Improv bookmarks — included in Canvas/bookmarks.json if non-empty */
+  bookmarks?: Bookmark[] | null;
 }
 
 /**
@@ -77,9 +82,15 @@ export async function createPezBundle(options: PezExportOptions): Promise<Blob> 
     }
   }
 
-  // 6. Add groups.json if non-empty (Phichain editor-only data)
-  if (options.groups && options.groups.length > 0) {
-    zip.file("groups.json", JSON.stringify(options.groups, null, 2));
+  // 6. Add Canvas/ folder with editor-only data (groups + bookmarks)
+  const canvasFolder = zip.folder("Canvas");
+  if (canvasFolder) {
+    if (options.groups && options.groups.length > 0) {
+      canvasFolder.file("groups.json", JSON.stringify(options.groups, null, 2));
+    }
+    if (options.bookmarks && options.bookmarks.length > 0) {
+      canvasFolder.file("bookmarks.json", JSON.stringify(options.bookmarks, null, 2));
+    }
   }
 
   // 7. Generate info.yml (Phira chart standard metadata)
