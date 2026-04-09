@@ -38,7 +38,7 @@ interface ChannelState {
 
 const ALL_CHANNELS: LineEventKind[] = ["x", "y", "rotation", "opacity", "speed"];
 
-const CHANNEL_LABELS: Record<LineEventKind, string> = {
+const CHANNEL_LABELS: Partial<Record<LineEventKind, string>> = {
   x: "X Position",
   y: "Y Position",
   rotation: "Rotation",
@@ -46,7 +46,7 @@ const CHANNEL_LABELS: Record<LineEventKind, string> = {
   speed: "Speed",
 };
 
-const CHANNEL_DEFAULTS: Record<LineEventKind, number> = {
+const CHANNEL_DEFAULTS: Partial<Record<LineEventKind, number>> = {
   x: 0,
   y: 0,
   rotation: 0,
@@ -54,7 +54,7 @@ const CHANNEL_DEFAULTS: Record<LineEventKind, number> = {
   speed: 1,
 };
 
-const CHANNEL_COLORS: Record<LineEventKind, string> = {
+const CHANNEL_COLORS: Partial<Record<LineEventKind, string>> = {
   x: "#4fc3f7",
   y: "#81c784",
   rotation: "#ffb74d",
@@ -381,14 +381,14 @@ export function PresetBuilder({ onClose }: { onClose: () => void }) {
                 {
                   id: generateKeyframeId(),
                   beatOffset: 0,
-                  value: CHANNEL_DEFAULTS[kind],
+                  value: CHANNEL_DEFAULTS[kind] ?? 0,
                   useCurrent: false,
                   easing: "linear",
                 },
                 {
                   id: generateKeyframeId(),
                   beatOffset: totalBeats,
-                  value: CHANNEL_DEFAULTS[kind],
+                  value: CHANNEL_DEFAULTS[kind] ?? 0,
                   useCurrent: false,
                   easing: "linear",
                 },
@@ -407,7 +407,7 @@ export function PresetBuilder({ onClose }: { onClose: () => void }) {
           const newKf: Keyframe = {
             id: generateKeyframeId(),
             beatOffset: Math.round(beatOffset * 4) / 4, // snap to quarter beats
-            value: CHANNEL_DEFAULTS[kind],
+            value: CHANNEL_DEFAULTS[kind] ?? 0,
             useCurrent: false,
             easing: "linear",
           };

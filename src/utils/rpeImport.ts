@@ -6,6 +6,10 @@
 // easing clipping, bezier curves, note controls, line properties.
 //
 // Original from phichain-chart/src/format/rpe.rs
+//
+// Recent change: Added runtime validation for beat tuples from
+// external RPE data. Previously bare `as Beat` casts could let
+// malformed data (wrong length, non-number elements) slip through.
 // ============================================================
 
 import type {
@@ -23,6 +27,35 @@ import type {
   NoteControlEntry,
 } from "../types/chart";
 import { subtractBeats } from "./beat";
+
+// ============================================================
+// Beat Tuple Validation
+//
+// RPE files are external data — beat tuples may be malformed
+// (wrong length, non-number elements, zero/negative denominator).
+// Validate at import boundaries rather than trusting `as Beat`.
+// ============================================================
+
+/** Default beat used when RPE data contains an invalid beat tuple */
+const FALLBACK_BEAT: Beat = [0, 0, 1];
+
+/**
+ * Validate and coerce an RPE beat array into a safe Beat tuple.
+ * Returns FALLBACK_BEAT for malformed input instead of crashing.
+ */
+function validateBeat(input: unknown): Beat {
+  if (!Array.isArray(input) || input.length < 3) return FALLBACK_BEAT;
+  const [whole, numer, denom] = input;
+  if (typeof whole !== "number" || typeof numer !== "number" || typeof denom !== "number") {
+    return FALLBACK_BEAT;
+  }
+  if (!Number.isFinite(whole) || !Number.isFinite(numer) || !Number.isFinite(denom)) {
+    return FALLBACK_BEAT;
+  }
+  // Denominator must be positive to avoid division by zero in beatToFloat
+  if (denom <= 0) return [whole, 0, 1];
+  return [whole, numer, denom];
+}
 
 // ============================================================
 // RPE Format Types
@@ -46,6 +79,7 @@ interface RpeChart {
   };
   judgeLineList: RpeLine[];
   judgeLineGroup?: string[];
+  xybind?: boolean;
 }
 
 interface RpeLine {
@@ -227,8 +261,8 @@ function rpeNoteTypeToKind(type: number): NoteKind {
 // ============================================================
 
 function convertRpeEvent(rEvent: RpeEvent, kind: LineEventKind): LineEvent {
-  const startBeat = rEvent.startTime as Beat;
-  const endBeat = rEvent.endTime as Beat;
+  const startBeat = validateBeat(rEvent.startTime);
+  const endBeat = validateBeat(rEvent.endTime);
   const easingType = rpeEasingToPhichain(rEvent);
 
   // Easing clipping (sub-range of easing curve)
@@ -273,8 +307,8 @@ function convertRpeEvent(rEvent: RpeEvent, kind: LineEventKind): LineEvent {
 }
 
 function convertRpeColorEvent(rEvent: RpeColorEvent): LineEvent {
-  const startBeat = rEvent.startTime as Beat;
-  const endBeat = rEvent.endTime as Beat;
+  const startBeat = validateBeat(rEvent.startTime);
+  const endBeat = validateBeat(rEvent.endTime);
 
   let easing: EasingType = "linear";
   if (rEvent.bezier === 1 && rEvent.bezierPoints) {
@@ -343,8 +377,8 @@ function convertRpeTextEvent(rEvent: RpeTextEvent): LineEvent {
 
   const event: LineEvent = {
     kind: "text",
-    start_beat: rEvent.startTime as Beat,
-    end_beat: rEvent.endTime as Beat,
+    start_beat: validateBeat(rEvent.startTime),
+    end_beat: validateBeat(rEvent.endTime),
     value,
   };
   if (rEvent.easingLeft != null && rEvent.easingLeft !== 0) {
@@ -400,9 +434,9 @@ function convertEventLayer(layer: RpeEventLayer): EventLayer {
 export function convertRpeToPhichain(rpeJson: string): PhichainChart {
   const rpe: RpeChart = JSON.parse(rpeJson);
 
-  // Convert BPM list
+  // Convert BPM list (validate beat tuples from external data)
   const bpm_list: BpmPoint[] = rpe.BPMList.map((b) => ({
-    beat: b.startTime as Beat,
+    beat: validateBeat(b.startTime),
     bpm: b.bpm,
   }));
 
@@ -414,7 +448,7 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
       const note: Note = {
         kind,
         above: rNote.above === 1,
-        beat: rNote.startTime as Beat,
+        beat: validateBeat(rNote.startTime),
         x: Math.round(rNote.positionX),
         speed: rNote.speed,
         fake: rNote.isFake === 1 ? true : undefined,
@@ -430,8 +464,8 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
 
       if (kind === "hold") {
         note.hold_beat = subtractBeats(
-          rNote.endTime as Beat,
-          rNote.startTime as Beat,
+          validateBeat(rNote.endTime),
+          validateBeat(rNote.startTime),
         );
       }
 
@@ -576,6 +610,10 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
     chart.line_groups = rpe.judgeLineGroup;
   }
 
+  if (rpe.xybind === true) {
+    chart.xybind = true;
+  }
+
   return chart;
 }
 
@@ -583,13 +621,18 @@ export function convertRpeToPhichain(rpeJson: string): PhichainChart {
 // Unknown Field Detection
 // ============================================================
 
-const KNOWN_CHART_KEYS = new Set(["BPMList", "META", "judgeLineList", "judgeLineGroup", "chartTime", "multiLineString", "multiScale"]);
+// chartTime, multiLineString, multiScale are RPE editor-only metadata
+// (Phira docs: "Simulators do not need this property"). Recognized but not imported.
+const KNOWN_CHART_KEYS = new Set([
+  "BPMList", "META", "judgeLineList", "judgeLineGroup", "xybind",
+  "chartTime", "multiLineString", "multiScale",
+]);
 const KNOWN_META_KEYS = new Set(["RPEVersion", "name", "composer", "charter", "level", "illustrator", "offset", "background", "song", "illustration", "id", "duration"]);
 const KNOWN_LINE_KEYS = new Set([
   "Name", "notes", "eventLayers", "father", "zOrder", "isCover", "bpmfactor",
   "Group", "Texture", "anchor", "rotateWithFather", "attachUI", "isGif",
   "extended", "posControl", "alphaControl", "sizeControl", "skewControl", "yControl",
-  "numOfNotes",
+  "numOfNotes",  // Computed count in RPE, not imported — just suppresses warning
 ]);
 const KNOWN_NOTE_KEYS = new Set([
   "type", "positionX", "above", "startTime", "endTime", "speed", "size",

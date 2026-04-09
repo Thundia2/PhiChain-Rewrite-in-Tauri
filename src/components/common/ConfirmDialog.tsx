@@ -38,6 +38,7 @@ const useConfirmStore = create<ConfirmState>()((set, get) => ({
 }));
 
 /** Call from anywhere (including outside React) to show a styled confirm dialog */
+// eslint-disable-next-line react-refresh/only-export-components
 export const showConfirm = (message: string) => useConfirmStore.getState().showConfirm(message);
 
 export function ConfirmDialog() {

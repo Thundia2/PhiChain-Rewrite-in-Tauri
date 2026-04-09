@@ -1,9 +1,20 @@
+// ============================================================
+// Command Palette — Quick-access search for actions and presets
+//
+// Ctrl+K opens a fuzzy-search overlay listing all menu actions,
+// built-in event presets, and panel toggles. Results are scored
+// by match quality and grouped by source (Actions, Presets).
+// Selecting a result executes its action and closes the palette.
+// ============================================================
+
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useMenus } from "../../hooks/useMenus";
 import type { Menu } from "../../hooks/useMenus";
 import { BUILTIN_PRESETS } from "../../presets/builtinPresets";
 import { applyPresetAtPlayhead } from "../../utils/applyPreset";
 import { useEditorStore } from "../../stores/editorStore";
+import { useFavoritesStore } from "../../stores/favoritesStore";
+import type { PanelId } from "../../types/editor";
 
 interface CommandItem {
   id: string;
@@ -55,11 +66,37 @@ function groupBySection(commands: CommandItem[]): [string, CommandItem[]][] {
 export function CommandPalette({
   open,
   onClose,
+  onTogglePanel,
+  onResetLayout,
+  onNewChart,
+  onShowParametric,
+  onShowBatchLine,
+  onShowLyricsSync,
+  onShowOnDemandPanel,
+  onShowPasteSpecial,
+  onShowGoToBeat,
+  onShowExportDiff,
+  onShowSelectiveExport,
+  onShowSpinGenerator,
+  onShowShakeGenerator,
 }: {
   open: boolean;
   onClose: () => void;
+  onTogglePanel?: (id: PanelId) => void;
+  onResetLayout?: () => void;
+  onNewChart?: () => void;
+  onShowParametric?: () => void;
+  onShowBatchLine?: () => void;
+  onShowLyricsSync?: () => void;
+  onShowOnDemandPanel?: (id: PanelId) => void;
+  onShowPasteSpecial?: () => void;
+  onShowGoToBeat?: () => void;
+  onShowExportDiff?: () => void;
+  onShowSelectiveExport?: () => void;
+  onShowSpinGenerator?: () => void;
+  onShowShakeGenerator?: () => void;
 }) {
-  const menus = useMenus();
+  const menus = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel, onShowPasteSpecial, onShowGoToBeat, onShowExportDiff, onShowSelectiveExport, onShowSpinGenerator, onShowShakeGenerator);
   const presetCommands = useMemo((): CommandItem[] => {
     return BUILTIN_PRESETS.map((preset) => ({
       id: `preset:${preset.id}`,
@@ -74,7 +111,15 @@ export function CommandPalette({
       disabled: useEditorStore.getState().selectedLineIndex === null,
     }));
   }, []);
-  const allCommands = useMemo(() => [...flattenMenus(menus), ...presetCommands], [menus, presetCommands]);
+  const favoritesCommands = useMemo((): CommandItem[] => [
+    {
+      id: "favorites:configure",
+      label: "Configure Favorites...",
+      section: "Favorites",
+      action: () => useFavoritesStore.getState().openWizard(),
+    },
+  ], []);
+  const allCommands = useMemo(() => [...flattenMenus(menus), ...presetCommands, ...favoritesCommands], [menus, presetCommands, favoritesCommands]);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);

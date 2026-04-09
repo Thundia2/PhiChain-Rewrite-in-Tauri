@@ -15,11 +15,35 @@
 //   rotation: angle in degrees (0 = horizontal)
 //   opacity:  0-255 (where 255 = fully visible, divided by 255 for rendering)
 //   speed:    note fall speed multiplier (default 10.0)
+//
+// Recent change: Added WeakMap-based cache for event grouping so the
+// same events array isn't re-grouped every frame. Cache auto-clears
+// when Immer produces a new events array reference.
 // ============================================================
 
 import type { LineEvent, LineEventKind, Beat, EventLayer, EasingType, Line } from "../types/chart";
 import { beatToFloat } from "../utils/beat";
 import { tween } from "./easings";
+
+// ---- Event grouping cache ----
+// WeakMap keyed by events array reference. When Immer produces a new
+// array on mutation, the old entry becomes eligible for GC automatically.
+const _eventGroupCache = new WeakMap<LineEvent[], Map<string, LineEvent[]>>();
+
+/** Get events grouped by kind, with caching across frames. */
+function getGroupedEvents(events: LineEvent[]): Map<string, LineEvent[]> {
+  let grouped = _eventGroupCache.get(events);
+  if (!grouped) {
+    grouped = new Map<string, LineEvent[]>();
+    for (const e of events) {
+      let arr = grouped.get(e.kind);
+      if (!arr) { arr = []; grouped.set(e.kind, arr); }
+      arr.push(e);
+    }
+    _eventGroupCache.set(events, grouped);
+  }
+  return grouped;
+}
 
 /** The computed state of a judgment line at a specific moment */
 export interface LineState {
@@ -112,13 +136,8 @@ function evaluateEvent(event: LineEvent, beat: number): number | null {
 export function evaluateLineEvents(events: LineEvent[], beat: number): LineState {
   const state = { ...DEFAULT_LINE_STATE };
 
-  // Group events by kind in a single pass (instead of filtering per-kind)
-  const grouped = new Map<string, LineEvent[]>();
-  for (const e of events) {
-    let arr = grouped.get(e.kind);
-    if (!arr) { arr = []; grouped.set(e.kind, arr); }
-    arr.push(e);
-  }
+  // Group events by kind (cached — same events array won't re-group across frames)
+  const grouped = getGroupedEvents(events);
 
   // Evaluate each numeric kind
   const kinds: LineEventKind[] = ["x", "y", "rotation", "opacity", "speed", "scale_x", "scale_y", "incline"];
@@ -339,13 +358,8 @@ export function evaluateLineEventsWithLayers(
   };
 
   // Extended events live in the flat events array (they aren't layered in RPE)
-  // Group once instead of filtering per-kind
-  const grouped = new Map<string, LineEvent[]>();
-  for (const e of events) {
-    let arr = grouped.get(e.kind);
-    if (!arr) { arr = []; grouped.set(e.kind, arr); }
-    arr.push(e);
-  }
+  // Group once (cached — same events array won't re-group across frames)
+  const grouped = getGroupedEvents(events);
 
   const extendedKinds: LineEventKind[] = ["scale_x", "scale_y", "incline", "gif"];
   for (const kind of extendedKinds) {

@@ -8,9 +8,12 @@
 // ============================================================
 
 import { useRef, useEffect, useState, useCallback } from "react";
-import type { EventPreset, EventTemplate } from "../../types/preset";
+import type { EventPreset, EventTemplate, BuiltinTemplateEntry } from "../../types/preset";
 import type { LineEventKind, EasingType } from "../../types/chart";
 import { beatToFloat } from "../../types/chart";
+
+// Union of both template entry formats for iteration
+type AnyTemplateEntry = BuiltinTemplateEntry | EventTemplate;
 
 const CANVAS_W = 80;
 const CANVAS_H = 60;
@@ -91,8 +94,22 @@ interface ChannelValue {
   speed: number;
 }
 
+// Keys of ChannelValue that can be animated in previews
+type AnimatableKind = keyof ChannelValue;
+
+function isAnimatableKind(kind: string): kind is AnimatableKind {
+  return kind === "x" || kind === "y" || kind === "rotation" || kind === "opacity" || kind === "speed";
+}
+
+/** Resolve a preset value token to a number, using current channel values for $CURRENT. */
+function resolvePreviewValue(val: number | string, kind: AnimatableKind, current: ChannelValue): number {
+  if (typeof val === "number") return val;
+  if (val === "$CURRENT") return current[kind];
+  return parseFloat(val) || 0;
+}
+
 function evaluatePresetAtTime(
-  templates: EventTemplate[],
+  templates: AnyTemplateEntry[],
   totalBeats: number,
   normalizedTime: number,
 ): ChannelValue {
@@ -101,29 +118,60 @@ function evaluatePresetAtTime(
   const result: ChannelValue = { x: 0, y: 0, rotation: 0, opacity: 255, speed: 1 };
 
   for (const tmpl of templates) {
-    const start = beatToFloat(tmpl.startBeatOffset);
-    const end = beatToFloat(tmpl.endBeatOffset);
-    const startVal = tmpl.startValue === "$CURRENT" ? result[tmpl.kind] : tmpl.startValue;
-    const endVal = tmpl.endValue === "$CURRENT" ? result[tmpl.kind] : tmpl.endValue;
+    // Only animate channels that exist in ChannelValue
+    if (!isAnimatableKind(tmpl.kind)) continue;
 
-    if (currentBeat < start) continue;
-    if (currentBeat >= end) {
-      result[tmpl.kind] = endVal;
-      continue;
+    if ("startBeatOffset" in tmpl) {
+      // ---- EventTemplate format (from Preset Builder) ----
+      const start = beatToFloat(tmpl.startBeatOffset);
+      const end = beatToFloat(tmpl.endBeatOffset);
+      const startVal = resolvePreviewValue(tmpl.startValue, tmpl.kind, result);
+      const endVal = resolvePreviewValue(tmpl.endValue, tmpl.kind, result);
+
+      if (currentBeat < start) continue;
+      if (currentBeat >= end) {
+        result[tmpl.kind] = endVal;
+        continue;
+      }
+
+      const progress = (currentBeat - start) / Math.max(0.001, end - start);
+      const easedProgress = evaluateEasing(Math.max(0, Math.min(1, progress)), tmpl.easing);
+      result[tmpl.kind] = startVal + (endVal - startVal) * easedProgress;
+    } else {
+      // ---- BuiltinTemplateEntry format ----
+      const start = tmpl.beatOffset;
+      const end = tmpl.endBeatOffset;
+
+      if (currentBeat < start) continue;
+
+      if ("constant" in tmpl.value) {
+        const val = resolvePreviewValue(tmpl.value.constant, tmpl.kind, result);
+        result[tmpl.kind] = val;
+      } else if ("transition" in tmpl.value) {
+        const sVal = resolvePreviewValue(tmpl.value.transition.start, tmpl.kind, result);
+        const eVal = resolvePreviewValue(tmpl.value.transition.end, tmpl.kind, result);
+        if (currentBeat >= end) {
+          result[tmpl.kind] = eVal;
+          continue;
+        }
+        const progress = (currentBeat - start) / Math.max(0.001, end - start);
+        const easedProgress = evaluateEasing(Math.max(0, Math.min(1, progress)), tmpl.value.transition.easing);
+        result[tmpl.kind] = sVal + (eVal - sVal) * easedProgress;
+      }
     }
-
-    const progress = (currentBeat - start) / Math.max(0.001, end - start);
-    const easedProgress = evaluateEasing(Math.max(0, Math.min(1, progress)), tmpl.easing);
-    result[tmpl.kind] = startVal + (endVal - startVal) * easedProgress;
   }
 
   return result;
 }
 
-function getTotalBeats(templates: EventTemplate[]): number {
+function getTotalBeats(templates: AnyTemplateEntry[]): number {
   let maxBeat = 0;
   for (const tmpl of templates) {
-    maxBeat = Math.max(maxBeat, beatToFloat(tmpl.endBeatOffset));
+    if ("startBeatOffset" in tmpl) {
+      maxBeat = Math.max(maxBeat, beatToFloat(tmpl.endBeatOffset));
+    } else {
+      maxBeat = Math.max(maxBeat, tmpl.endBeatOffset);
+    }
   }
   return Math.max(1, maxBeat);
 }
@@ -132,7 +180,7 @@ function getTotalBeats(templates: EventTemplate[]): number {
 // Channel color mapping for drawing
 // ============================================================
 
-const CHANNEL_COLORS: Record<LineEventKind, string> = {
+const CHANNEL_COLORS: Partial<Record<LineEventKind, string>> = {
   x: "#4fc3f7",
   y: "#81c784",
   rotation: "#ffb74d",
@@ -239,23 +287,30 @@ export function PresetPreviewAnimation({
       // Channel indicators at top-left
       const activeChannels = [...new Set(preset.template.map((t) => t.kind))];
       activeChannels.forEach((ch, i) => {
-        ctx.fillStyle = CHANNEL_COLORS[ch];
+        ctx.fillStyle = CHANNEL_COLORS[ch] ?? "#888";
         ctx.fillRect(2 + i * 6, 2, 4, 4);
       });
     },
     [preset, totalBeats],
   );
 
-  const animate = useCallback(
-    (timestamp: number) => {
+  const animateFnRef = useRef<((timestamp: number) => void) | null>(null);
+  useEffect(() => {
+    animateFnRef.current = (timestamp: number) => {
       if (!startTimeRef.current) startTimeRef.current = timestamp;
       const elapsed = timestamp - startTimeRef.current;
       const normalizedTime = (elapsed % ANIMATION_DURATION) / ANIMATION_DURATION;
 
       draw(normalizedTime);
-      animFrameRef.current = requestAnimationFrame(animate);
+      animFrameRef.current = requestAnimationFrame((t) => animateFnRef.current?.(t));
+    };
+  }, [draw]);
+
+  const animate = useCallback(
+    (timestamp: number) => {
+      animateFnRef.current?.(timestamp);
     },
-    [draw],
+    [],
   );
 
   const startAnimation = useCallback(() => {

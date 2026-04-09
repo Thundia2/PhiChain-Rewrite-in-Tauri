@@ -8,6 +8,7 @@ import type React from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useGroupStore } from "../../stores/groupStore";
+import { useTabStore } from "../../stores/tabStore";
 
 const toggleBtnStyle: React.CSSProperties = {
   background: "none",
@@ -31,6 +32,13 @@ export function StatusBar() {
   const inspectorOpen = useEditorStore((s) => s.unifiedInspectorOpen);
   const toggleKeyframeBar = useEditorStore((s) => s.toggleKeyframeBar);
   const toggleInspector = useEditorStore((s) => s.toggleUnifiedInspector);
+  const curveEditorExpanded = useEditorStore((s) => s.curveEditorExpanded);
+  const toggleCurveEditorExpanded = useEditorStore((s) => s.toggleCurveEditorExpanded);
+  // Read active tab type to display correct editor label
+  const activeTabType = useTabStore((s) => {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    return tab?.type;
+  });
 
   return (
     <div
@@ -73,9 +81,24 @@ export function StatusBar() {
           Inspector {"\u25B8"}
         </button>
       )}
+      {keyframeBarOpen && (
+        <button
+          onClick={toggleCurveEditorExpanded}
+          style={{
+            ...toggleBtnStyle,
+            color: curveEditorExpanded ? "var(--accent-primary)" : "var(--text-muted)",
+            borderColor: curveEditorExpanded ? "var(--accent-primary)" : "var(--border-color)",
+          }}
+          title={curveEditorExpanded ? "Collapse curve editor (Shift+K)" : "Expand curve editor (Shift+K)"}
+        >
+          Curves {curveEditorExpanded ? "\u25BE" : "\u25B4"}
+        </button>
+      )}
       <div style={{ flex: 1 }} />
       <span>Zoom: {(zoom * 100).toFixed(0)}%</span>
-      <span style={{ color: "var(--accent-primary)" }}>Unified Editor</span>
+      <span style={{ color: "var(--accent-primary)" }}>
+        {activeTabType === "unrolled_editor" ? "Unrolled Editor" : "Unified Editor"}
+      </span>
     </div>
   );
 }

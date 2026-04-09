@@ -4,6 +4,9 @@
 // Manages browser-like tabs: Home, Chart(s), Line Event Editor, Panels.
 // Home tab is always present and not closable.
 //
+// Recent change: Added openUnrolledLineEditor() for per-line
+// unrolled editor tabs. closeTab now cleans up per-tab state.
+//
 // Usage:
 //   const tabs = useTabStore(s => s.tabs);
 //   const activeTabId = useTabStore(s => s.activeTabId);
@@ -11,8 +14,9 @@
 
 import { create } from "zustand";
 import { useSettingsStore } from "./settingsStore";
+import { useEditorStore } from "./editorStore";
 
-export type TabType = "home" | "chart" | "line_event_editor" | "panel" | "unified_editor";
+export type TabType = "home" | "chart" | "line_event_editor" | "panel" | "unified_editor" | "unrolled_editor";
 
 export interface Tab {
   id: string;
@@ -26,16 +30,21 @@ export interface TabState {
   tabs: Tab[];
   activeTabId: string;
 
+  /** Open or focus a tab. Creates if new, updates label/data if existing. */
   openTab: (tab: Tab) => void;
+  /** Close a tab. Falls back to adjacent tab or Home if the closed tab was active. */
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   updateTabLabel: (tabId: string, label: string) => void;
 
-  // Convenience
+  // Convenience — typed wrappers around openTab
   openChart: (chartId: string, label: string) => void;
   openLineEventEditor: (lineIndex: number, lineName: string) => void;
   openPanel: (panelId: string, label: string) => void;
   openUnifiedEditor: () => void;
+  openUnrolledEditor: () => void;
+  /** Open a per-line unrolled editor tab. Creates a tab locked to lineIndex. */
+  openUnrolledLineEditor: (lineIndex: number, lineName: string, initialScrollBeat: number) => void;
 
   /** Get the tab ID that would be used for a given chartId under current settings */
   getChartTabId: (chartId: string) => string;
@@ -77,6 +86,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
     } else {
       set({ tabs: newTabs });
     }
+
+    // Clean up per-line unrolled tab state when closed
+    if (tab.id.startsWith("unrolled-line:") && tab.data?.lineIndex !== undefined) {
+      const li = tab.data.lineIndex as number;
+      useEditorStore.getState().clearLineTabScrollBeat(li);
+      useEditorStore.getState().clearUnrolledFollowPlayback(String(li));
+    }
   },
 
   setActiveTab: (tabId) => {
@@ -96,6 +112,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
         id: `unified:${chartId}`,
         type: "unified_editor",
         label: label || "Unified Editor",
+        closable: true,
+      });
+    } else if (defaultView === "unrolled") {
+      get().openTab({
+        id: `unrolled:${chartId}`,
+        type: "unrolled_editor",
+        label: label || "Unrolled Editor",
         closable: true,
       });
     } else {
@@ -133,8 +156,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
     const activeTab = tabs.find((t) => t.id === activeTabId);
     let chartId = "current";
     let label = "Unified Editor";
-    if (activeTab?.type === "chart" && activeTab.id.startsWith("chart:")) {
-      chartId = activeTab.id.slice("chart:".length);
+    // Extract chartId from any chart-like tab (including unrolled_editor)
+    if (
+      activeTab?.type === "chart" ||
+      activeTab?.type === "unified_editor" ||
+      activeTab?.type === "unrolled_editor"
+    ) {
+      chartId = activeTab.id.split(":").slice(1).join(":") || "current";
       label = activeTab.label;
     }
     get().openTab({
@@ -145,8 +173,47 @@ export const useTabStore = create<TabState>()((set, get) => ({
     });
   },
 
+  openUnrolledEditor: () => {
+    const { tabs, activeTabId } = get();
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    let chartId = "current";
+    let label = "Unrolled Editor";
+    // Extract chartId from any chart-like tab (including itself)
+    if (
+      activeTab?.type === "chart" ||
+      activeTab?.type === "unified_editor" ||
+      activeTab?.type === "unrolled_editor"
+    ) {
+      chartId = activeTab.id.split(":").slice(1).join(":") || "current";
+      label = activeTab.label;
+    }
+    get().openTab({
+      id: `unrolled:${chartId}`,
+      type: "unrolled_editor",
+      label,
+      closable: true,
+    });
+  },
+
+  openUnrolledLineEditor: (lineIndex, lineName, initialScrollBeat) => {
+    // Initialize per-tab scroll beat if this is the first open
+    const es = useEditorStore.getState();
+    if (es.lineTabScrollBeats[lineIndex] === undefined) {
+      es.setLineTabScrollBeat(lineIndex, initialScrollBeat);
+    }
+    get().openTab({
+      id: `unrolled-line:${lineIndex}`,
+      type: "unrolled_editor",
+      label: `Unrolled: ${lineName}`,
+      closable: true,
+      data: { lineIndex },
+    });
+  },
+
   getChartTabId: (chartId) => {
     const defaultView = useSettingsStore.getState().defaultEditorView;
-    return defaultView === "unified" ? `unified:${chartId}` : `chart:${chartId}`;
+    if (defaultView === "unified") return `unified:${chartId}`;
+    if (defaultView === "unrolled") return `unrolled:${chartId}`;
+    return `chart:${chartId}`;
   },
 }));

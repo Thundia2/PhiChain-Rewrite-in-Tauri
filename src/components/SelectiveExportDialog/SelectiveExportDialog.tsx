@@ -100,7 +100,7 @@ export function SelectiveExportDialog({ open, onClose }: SelectiveExportDialogPr
     a.click();
     URL.revokeObjectURL(url);
     onClose();
-  }, [chart, selectedLines, startBeat, endBeat, format, onClose]);
+  }, [chart, selectedLines, startBeat, endBeat, onClose]);
 
   if (!open) return null;
 

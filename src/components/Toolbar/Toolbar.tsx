@@ -6,6 +6,7 @@
 // ============================================================
 
 import { useEditorStore } from "../../stores/editorStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import type { EditorTool } from "../../types/editor";
 
 interface ToolDef {
@@ -23,6 +24,7 @@ const TOOLS: ToolDef[] = [
   { id: "place_flick", label: "Flick", icon: "▲", shortcut: "E", color: "#ff4a6a" },
   { id: "place_hold", label: "Hold", icon: "▮", shortcut: "R", color: "#4aff7a" },
   { id: "eraser", label: "Eraser", icon: "✕", shortcut: "X", color: "#ff8a8a" },
+  { id: "place_pattern", label: "Pattern", icon: "⊡", shortcut: "Ctrl+G", color: "#c084fc" },
 ];
 
 export function Toolbar() {
@@ -32,6 +34,13 @@ export function Toolbar() {
   const toggleBeatSync = useEditorStore((s) => s.toggleBeatSyncPlacement);
   const canvasActivePanelId = useEditorStore((s) => s.canvasActivePanelId);
   const setCanvasActivePanel = useEditorStore((s) => s.setCanvasActivePanel);
+  const stepRecordActive = useEditorStore((s) => s.stepRecordActive);
+  const toggleStepRecord = useEditorStore((s) => s.toggleStepRecord);
+  const xSnapEnabled = useEditorStore((s) => s.xSnapEnabled);
+  const toggleXSnap = useEditorStore((s) => s.toggleXSnap);
+  const lanes = useEditorStore((s) => s.lanes);
+  const setLanes = useEditorStore((s) => s.setLanes);
+  const showBeatGrid = useSettingsStore((s) => s.showBeatGrid);
 
   return (
     <div
@@ -108,6 +117,129 @@ export function Toolbar() {
       >
         <span>◷</span>
         <span style={{ fontSize: 7, opacity: 0.6 }}>T</span>
+      </button>
+
+      {/* Step Record toggle */}
+      <button
+        onClick={toggleStepRecord}
+        title={`Step Record (S) — auto-advance beat on each click`}
+        style={{
+          width: 36,
+          height: 34,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 1,
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+          background: stepRecordActive ? "#22d3ee18" : "transparent",
+          borderLeft: stepRecordActive ? "2px solid #22d3ee" : "2px solid transparent",
+          color: stepRecordActive ? "#22d3ee" : "#666",
+          fontSize: 14,
+          transition: "all 0.15s",
+          fontFamily: "inherit",
+          padding: 0,
+        }}
+      >
+        <span>{"\u23E9"}</span>
+        <span style={{ fontSize: 7, opacity: 0.6 }}>S</span>
+      </button>
+
+      {/* Divider */}
+      <div style={{ height: 1, margin: "3px 6px", background: "var(--border-color)" }} />
+
+      {/* X Snap toggle */}
+      <button
+        onClick={toggleXSnap}
+        title={`X Snap (Shift+X) — snap notes to lane grid (${lanes} lanes)`}
+        style={{
+          width: 36,
+          height: 28,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+          background: xSnapEnabled ? "#8b5cf618" : "transparent",
+          borderLeft: xSnapEnabled ? "2px solid #8b5cf6" : "2px solid transparent",
+          color: xSnapEnabled ? "#8b5cf6" : "#666",
+          fontSize: 10,
+          fontWeight: xSnapEnabled ? 700 : 400,
+          transition: "all 0.15s",
+          fontFamily: "inherit",
+          padding: 0,
+        }}
+      >
+        ⊞
+      </button>
+
+      {/* Lane preset pills — set lanes AND enable snap in one click */}
+      {([9, 18, 30] as const).map((n) => {
+        const isActive = xSnapEnabled && lanes === n;
+        return (
+          <button
+            key={n}
+            onClick={() => {
+              setLanes(n);
+              if (!xSnapEnabled) toggleXSnap();
+            }}
+            title={`${n}-lane grid (step ${Math.round(1350 / n)})`}
+            style={{
+              width: 36,
+              height: 20,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              background: isActive ? "#8b5cf618" : "transparent",
+              color: isActive ? "#8b5cf6" : "#555",
+              fontSize: 9,
+              fontWeight: isActive ? 700 : 400,
+              fontFamily: "inherit",
+              padding: 0,
+              transition: "all 0.15s",
+            }}
+          >
+            {n}
+          </button>
+        );
+      })}
+
+      {/* Divider — separates X snap section from beat grid toggle */}
+      <div style={{ height: 1, margin: "3px 6px", background: "var(--border-color)" }} />
+
+      {/* Beat Grid toggle — show beat subdivisions perpendicular to line */}
+      <button
+        onClick={() => {
+          const ss = useSettingsStore.getState();
+          ss.updateSettings({ showBeatGrid: !ss.showBeatGrid });
+        }}
+        title="Beat Grid — show beat subdivisions perpendicular to line"
+        style={{
+          width: 36,
+          height: 28,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+          background: showBeatGrid ? "#6c8aff18" : "transparent",
+          borderLeft: showBeatGrid ? "2px solid #6c8aff" : "2px solid transparent",
+          color: showBeatGrid ? "#6c8aff" : "#666",
+          fontSize: 10,
+          fontWeight: showBeatGrid ? 700 : 400,
+          transition: "all 0.15s",
+          fontFamily: "inherit",
+          padding: 0,
+        }}
+      >
+        ⊥
       </button>
 
       {/* Spacer */}

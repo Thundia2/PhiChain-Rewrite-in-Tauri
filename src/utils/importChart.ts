@@ -5,6 +5,11 @@
 // the chart using the RPE importer. Records to recent projects.
 // This is extracted so it can be called from both the HomeScreen
 // card, the Ctrl+O hotkey, and the File menu.
+//
+// Recent change: Added cleanup for blob Object URLs and custom
+// FontFace on project replacement/close. Previously these leaked
+// indefinitely — URLs were never revoked and fonts accumulated
+// in document.fonts across imports.
 // ============================================================
 
 import type JSZip from "jszip";
@@ -22,8 +27,72 @@ import {
   registerSession,
   setSkipNextSave,
   setSkipNextRestore,
+  setAudioBlobUrl,
 } from "./chartSessions";
 import type { ExtraConfig } from "../types/extra";
+
+// ============================================================
+// Resource cleanup tracking
+//
+// Track blob Object URLs and custom FontFace objects so they can
+// be revoked/removed when a new project is imported or the current
+// project is closed. Without this, each import leaked one URL per
+// music/illustration/font blob and accumulated FontFace entries.
+// ============================================================
+let _trackedMusicUrl: string | null = null;
+let _trackedIllustrationUrl: string | null = null;
+let _trackedFontUrl: string | null = null;
+let _trackedFontFace: FontFace | null = null;
+
+/** Revoke all tracked blob URLs and remove custom font. */
+function cleanupTrackedResources() {
+  if (_trackedMusicUrl) {
+    URL.revokeObjectURL(_trackedMusicUrl);
+    _trackedMusicUrl = null;
+  }
+  if (_trackedIllustrationUrl) {
+    URL.revokeObjectURL(_trackedIllustrationUrl);
+    _trackedIllustrationUrl = null;
+  }
+  if (_trackedFontFace) {
+    document.fonts.delete(_trackedFontFace);
+    _trackedFontFace = null;
+  }
+  if (_trackedFontUrl) {
+    URL.revokeObjectURL(_trackedFontUrl);
+    _trackedFontUrl = null;
+  }
+}
+
+// Auto-cleanup when project is closed (same pattern as bookmarkStore/groupStore)
+let _lastImportIsLoaded = false;
+useChartStore.subscribe((state) => {
+  if (_lastImportIsLoaded && !state.isLoaded) {
+    queueMicrotask(cleanupTrackedResources);
+  }
+  _lastImportIsLoaded = state.isLoaded;
+});
+
+/**
+ * Search a ZIP archive for an entry whose basename (filename without path)
+ * matches the target name, case-insensitively. Returns the first match or null.
+ * Used to locate the exact audio/illustration file specified by RPE META fields
+ * even when the ZIP contains multiple files with the same extension (e.g. drag
+ * sound effects alongside the actual song).
+ */
+function findZipEntryByBasename(
+  zip: JSZip,
+  targetName: string,
+): JSZip.JSZipObject | null {
+  const target = targetName.toLowerCase();
+  let found: JSZip.JSZipObject | null = null;
+  zip.forEach((relativePath, entry) => {
+    if (found || entry.dir) return;
+    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
+    if (baseName === target) found = entry;
+  });
+  return found;
+}
 
 /**
  * Opens a file picker and imports an RPE chart (.json, .zip, .pez).
@@ -130,8 +199,35 @@ export function triggerImportChart() {
       const { convertRpeToPhichain, extractRpeMeta, collectUnknownRpeFields } = await import(
         "./rpeImport"
       );
-      const chart = convertRpeToPhichain(chartText);
+
+      // Parse the RPE chart with dedicated error handling so malformed
+      // files get a user-friendly message instead of a raw stack trace
+      let chart;
+      try {
+        chart = convertRpeToPhichain(chartText);
+      } catch (parseErr) {
+        const reason = parseErr instanceof Error ? parseErr.message : "Unknown parse error";
+        throw new Error(`Failed to parse RPE chart: ${reason}`);
+      }
       const meta = extractRpeMeta(chartText);
+
+      // Override audio/illustration with the exact files specified by RPE META.
+      // The initial ZIP scan picks the first audio/image file it encounters,
+      // which may be a sound effect (e.g. drag hit sound) instead of the song.
+      // META.song and META.background name the correct files explicitly.
+      if (zip && meta.rpe_song) {
+        const metaAudio = findZipEntryByBasename(zip, meta.rpe_song);
+        if (metaAudio) {
+          musicBlob = await metaAudio.async("blob");
+          musicExt = meta.rpe_song.split(".").pop()?.toLowerCase() ?? "mp3";
+        }
+      }
+      if (zip && meta.rpe_background) {
+        const metaImage = findZipEntryByBasename(zip, meta.rpe_background);
+        if (metaImage) {
+          illustrationBlob = await metaImage.async("blob");
+        }
+      }
 
       // Warn about unrecognized RPE fields
       const unknownFields = collectUnknownRpeFields(chartText);
@@ -165,13 +261,21 @@ export function triggerImportChart() {
       });
 
       if (musicBlob && musicExt) {
+        // Revoke previous music URL before creating a new one
+        if (_trackedMusicUrl) URL.revokeObjectURL(_trackedMusicUrl);
         const musicUrl = URL.createObjectURL(musicBlob);
+        _trackedMusicUrl = musicUrl;
         await audioEngine.load(musicUrl, musicExt);
         useAudioStore.getState().setMusicLoaded(true);
+        // Track the blob URL + format so tab session restore can reuse it
+        setAudioBlobUrl(musicUrl, musicExt);
       }
 
       if (illustrationBlob) {
+        // Revoke previous illustration URL before creating a new one
+        if (_trackedIllustrationUrl) URL.revokeObjectURL(_trackedIllustrationUrl);
         const illustrationUrl = URL.createObjectURL(illustrationBlob);
+        _trackedIllustrationUrl = illustrationUrl;
         await cs.loadIllustration(illustrationUrl);
       }
 
@@ -201,6 +305,12 @@ export function triggerImportChart() {
 
       if (fontEntry) {
         try {
+          // Clean up previous custom font before loading a new one
+          if (_trackedFontFace) document.fonts.delete(_trackedFontFace);
+          if (_trackedFontUrl) URL.revokeObjectURL(_trackedFontUrl);
+          _trackedFontFace = null;
+          _trackedFontUrl = null;
+
           const fontBlob = await (fontEntry as JSZip.JSZipObject).async(
             "blob",
           );
@@ -208,6 +318,8 @@ export function triggerImportChart() {
           const fontFace = new FontFace("ChartCustomFont", `url(${fontUrl})`);
           await fontFace.load();
           document.fonts.add(fontFace);
+          _trackedFontUrl = fontUrl;
+          _trackedFontFace = fontFace;
           cs.setChartFontFamily("ChartCustomFont");
         } catch (e) {
           console.warn("Failed to load chart font:", e);
@@ -254,6 +366,7 @@ export function triggerImportChart() {
         meta,
         audioBlob: musicBlob ? await musicBlob.arrayBuffer() : null,
         audioExt: musicExt ?? null,
+        illustrationBlob: illustrationBlob ? await illustrationBlob.arrayBuffer() : null,
         savedAt: Date.now(),
       });
       useRecentProjectsStore.getState().addRecent({

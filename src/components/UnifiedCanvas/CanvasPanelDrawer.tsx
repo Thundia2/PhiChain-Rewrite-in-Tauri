@@ -9,10 +9,10 @@
 // Supports popping out into a separate browser window.
 // ============================================================
 
-import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useEditorStore } from "../../stores/editorStore";
 import type { PanelId } from "../../types/editor";
+import { usePopoutWindow } from "../../hooks/usePopoutWindow";
 
 // Panel components
 import { EffectsEditor } from "../EffectsEditor/EffectsEditor";
@@ -77,111 +77,6 @@ function renderCanvasPanel(id: PanelId) {
     default:
       return <div style={{ padding: 12, color: "var(--text-muted)" }}>Panel not available</div>;
   }
-}
-
-/** Copy all stylesheets from the parent window into a child window */
-function copyStylesToWindow(targetDoc: Document) {
-  // Copy <style> tags
-  document.querySelectorAll("style").forEach((style) => {
-    const clone = targetDoc.createElement("style");
-    clone.textContent = style.textContent;
-    targetDoc.head.appendChild(clone);
-  });
-
-  // Copy <link rel="stylesheet"> tags
-  document.querySelectorAll('link[rel="stylesheet"]').forEach((link) => {
-    const clone = targetDoc.createElement("link");
-    clone.rel = "stylesheet";
-    clone.href = (link as HTMLLinkElement).href;
-    targetDoc.head.appendChild(clone);
-  });
-}
-
-/** Hook to manage a popout browser window with React portal rendering */
-function usePopoutWindow(title: string) {
-  const [popoutWindow, setPopoutWindow] = useState<Window | null>(null);
-  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
-  const windowRef = useRef<Window | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const openPopout = useCallback(() => {
-    if (windowRef.current && !windowRef.current.closed) {
-      windowRef.current.focus();
-      return;
-    }
-
-    const w = window.open("", "", "width=800,height=500,menubar=no,toolbar=no,location=no,status=no");
-    if (!w) return;
-
-    w.document.title = title;
-
-    // Set up the document
-    copyStylesToWindow(w.document);
-
-    // Set background color to match app theme
-    w.document.body.style.margin = "0";
-    w.document.body.style.padding = "0";
-    w.document.body.style.backgroundColor = "var(--bg-primary, #1a1b2e)";
-    w.document.body.style.color = "var(--text-primary, #e0e0e0)";
-    w.document.body.style.fontFamily = "inherit";
-    w.document.body.style.overflow = "hidden";
-    w.document.body.style.height = "100vh";
-
-    // Create container div for React portal
-    const container = w.document.createElement("div");
-    container.id = "popout-root";
-    container.style.width = "100%";
-    container.style.height = "100%";
-    container.style.display = "flex";
-    container.style.flexDirection = "column";
-    w.document.body.appendChild(container);
-
-    windowRef.current = w;
-    setPopoutWindow(w);
-    setContainerEl(container);
-
-    // Clear any previous interval before creating a new one
-    if (intervalRef.current !== null) clearInterval(intervalRef.current);
-
-    // Listen for window close
-    intervalRef.current = setInterval(() => {
-      if (w.closed) {
-        if (intervalRef.current !== null) clearInterval(intervalRef.current);
-        intervalRef.current = null;
-        windowRef.current = null;
-        setPopoutWindow(null);
-        setContainerEl(null);
-      }
-    }, 500);
-  }, [title]);
-
-  const closePopout = useCallback(() => {
-    if (intervalRef.current !== null) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    if (windowRef.current && !windowRef.current.closed) {
-      windowRef.current.close();
-    }
-    windowRef.current = null;
-    setPopoutWindow(null);
-    setContainerEl(null);
-  }, []);
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      if (windowRef.current && !windowRef.current.closed) {
-        windowRef.current.close();
-      }
-    };
-  }, []);
-
-  return { popoutWindow, containerEl, openPopout, closePopout, isPopped: !!popoutWindow };
 }
 
 export function CanvasPanelDrawer() {

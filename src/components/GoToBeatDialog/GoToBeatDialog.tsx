@@ -15,7 +15,7 @@ import { useAudioStore } from "../../stores/audioStore";
 import { audioEngine } from "../../audio/audioEngine";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../types/chart";
-import type { Beat, Line } from "../../types/chart";
+import type { Line } from "../../types/chart";
 
 interface GoToBeatDialogProps {
   open: boolean;
@@ -252,6 +252,7 @@ export function GoToBeatDialog({ open, onClose }: GoToBeatDialogProps) {
   // Auto-focus and reset on open
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInput("");
       // Small delay to ensure the dialog is rendered before focusing
       requestAnimationFrame(() => {

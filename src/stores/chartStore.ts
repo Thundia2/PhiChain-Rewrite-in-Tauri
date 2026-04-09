@@ -1,13 +1,9 @@
 // ============================================================
 // Chart Store — Zustand + Immer
 //
-// Holds the chart data (lines, notes, events, BPM, offset) and
-// project metadata. All mutations are tracked for undo/redo via
-// a past/future snapshot stack.
-//
-// Usage:
-//   const lines = useChartStore(s => s.chart.lines);
-//   const addNote = useChartStore(s => s.addNote);
+// Recent change: Added _pastSeqs/_futureSeqs sequence tracking
+// to undo/redo stacks (via undoSequence.ts) so Ctrl+Z/Ctrl+Y
+// correctly interleaves chart and bookmark undo operations.
 // ============================================================
 
 import { create } from "zustand";
@@ -28,11 +24,59 @@ import { beatToFloat } from "../types/chart";
 import type { ExtraConfig } from "../types/extra";
 import { DEFAULT_EXTRA_CONFIG } from "../types/extra";
 import { ensureNoteUids, generateNoteUid } from "../utils/noteUid";
+import { BpmList } from "../utils/bpmList";
+import { nextUndoSeq } from "../utils/undoSequence";
 
 // ============================================================
 // CONFIGURABLE: Maximum undo history depth
 // ============================================================
 const MAX_HISTORY = 200;
+
+// ---- Cached BpmList — avoids re-creating on every consumer call ----
+// Rebuilds only when the bpm_list reference changes.
+let _cachedBpmListRef: BpmPoint[] | null = null;
+let _cachedBpmList: BpmList | null = null;
+
+/**
+ * Get a cached BpmList instance for the current chart.
+ * Consumers should call this instead of `new BpmList(cs.chart.bpm_list)`.
+ */
+export function getCachedBpmList(): BpmList {
+  const bpmListRef = useChartStore.getState().chart.bpm_list;
+  if (bpmListRef !== _cachedBpmListRef || !_cachedBpmList) {
+    _cachedBpmListRef = bpmListRef;
+    _cachedBpmList = new BpmList(bpmListRef);
+  }
+  return _cachedBpmList;
+}
+
+// ---- Cached multi-highlight beats — avoids O(all notes) per frame ----
+// Rebuilds only when the lines array reference changes (Immer produces new ref on mutation).
+let _cachedMultiBeatsLinesRef: Line[] | null = null;
+let _cachedMultiBeats: Set<number> | null = null;
+
+/**
+ * Get the set of beat positions that have notes on multiple lines.
+ * Cached across frames — only rebuilt when chart.lines changes.
+ */
+export function getCachedMultiBeats(): Set<number> {
+  const lines = useChartStore.getState().chart.lines;
+  if (lines !== _cachedMultiBeatsLinesRef || !_cachedMultiBeats) {
+    _cachedMultiBeatsLinesRef = lines;
+    const beatCounts = new Map<number, number>();
+    for (const line of lines) {
+      for (const note of line.notes) {
+        const b = beatToFloat(note.beat);
+        beatCounts.set(b, (beatCounts.get(b) ?? 0) + 1);
+      }
+    }
+    _cachedMultiBeats = new Set<number>();
+    for (const [b, count] of beatCounts) {
+      if (count > 1) _cachedMultiBeats.add(b);
+    }
+  }
+  return _cachedMultiBeats;
+}
 
 // Default empty chart
 const DEFAULT_CHART: PhichainChart = {
@@ -72,10 +116,13 @@ function createDefaultLine(name?: string, index?: number): Line {
 // ---- Helper: push current chart to past, clear future ----
 function pushHistory(state: ChartState) {
   state._past.push(current(state.chart));
+  state._pastSeqs.push(nextUndoSeq());
   if (state._past.length > MAX_HISTORY) {
     state._past.shift();
+    state._pastSeqs.shift();
   }
   state._future = [];
+  state._futureSeqs = [];
   state.isDirty = true;
 }
 
@@ -131,34 +178,56 @@ export interface ChartState {
   // Undo/redo stacks
   _past: PhichainChart[];
   _future: PhichainChart[];
+  /** Parallel sequence arrays — each entry's index matches the corresponding _past/_future entry */
+  _pastSeqs: number[];
+  _futureSeqs: number[];
 
   // ---- Project lifecycle ----
+  /** Load a project from disk data. Resets undo history and marks clean. */
   loadFromProjectData: (data: ProjectData) => void;
+  /** Close current project, reset all state to defaults. */
   closeProject: () => void;
+  /** Mark the project as saved (isDirty = false). */
   markClean: () => void;
 
   // ---- Chart-level mutations ----
+  /** Set the chart's audio offset in seconds. Pushes undo. */
   setOffset: (offset: number) => void;
+  /** Update project metadata (name, composer, charter, etc.). Pushes undo. */
   setMeta: (changes: Partial<ProjectMeta>) => void;
+  /** Replace the entire BPM list. Invalidates the cached BpmList instance. Pushes undo. */
   setBpmList: (bpmList: BpmPoint[]) => void;
 
   // ---- Line mutations ----
+  /** Add a new line with optional overrides. Generates a unique name if none given. Pushes undo. */
   addLine: (line?: Partial<Line>) => void;
+  /** Add multiple lines in a single undo entry. */
   batchAddLines: (partials: Partial<Line>[]) => void;
+  /** Remove a line by index. Clears selection if the removed line was selected. Pushes undo. */
   removeLine: (lineIndex: number) => void;
+  /** Deep-clone a line and insert after the original. Pushes undo. */
   duplicateLine: (lineIndex: number) => void;
+  /** Merge partial changes into a line. Only sorts events if beat fields changed. Pushes undo. */
   editLine: (lineIndex: number, changes: Partial<Line>) => void;
+  /** Move a line from one position to another. Pushes undo. */
   reorderLines: (fromIndex: number, toIndex: number) => void;
 
   // ---- Note mutations ----
+  /** Add a note to a line. Assigns a UID, sorts by beat. Pushes undo. */
   addNote: (lineIndex: number, note: Note) => void;
+  /** Remove notes by their indices within a line. Pushes undo. */
   removeNotes: (lineIndex: number, noteIndices: number[]) => void;
+  /** Edit a single note's properties. Pushes undo. */
   editNote: (lineIndex: number, noteIndex: number, changes: Partial<Note>) => void;
+  /** Edit multiple notes with the same changes. Pushes undo. */
   editNotes: (lineIndex: number, noteIndices: number[], changes: Partial<Note>) => void;
 
   // ---- Batch note/event mutations (single undo entry) ----
+  /** Add multiple notes to a line. Assigns UIDs, sorts by beat. Single undo entry. */
   batchAddNotes: (lineIndex: number, notes: Note[]) => void;
+  /** Apply different edits to different notes. Single undo entry. */
   batchEditNotes: (lineIndex: number, edits: Array<{ noteIndex: number; changes: Partial<Note> }>) => void;
+  /** Apply different edits to different events. Single undo entry. */
   batchEditEvents: (lineIndex: number, edits: Array<{ eventIndex: number; changes: Partial<LineEvent> }>) => void;
 
   /** Atomically apply mutations across multiple lines as a single undo entry (used by group batch operations) */
@@ -167,21 +236,31 @@ export interface ChartState {
     noteEdits?: Array<{ noteIndex: number; changes: Partial<Note> }>;
     eventEdits?: Array<{ eventIndex: number; changes: Partial<LineEvent> }>;
     newEvents?: LineEvent[];
+    newNotes?: Note[];
     removeEventIndices?: number[];
   }>) => void;
 
   // ---- Event mutations ----
+  /** Add an event to a line's flat event array. Sorts by start_beat. Pushes undo. */
   addEvent: (lineIndex: number, event: LineEvent) => void;
+  /** Remove events by indices from a line's flat event array. Pushes undo. */
   removeEvents: (lineIndex: number, eventIndices: number[]) => void;
+  /** Edit a single event's properties. Pushes undo. */
   editEvent: (lineIndex: number, eventIndex: number, changes: Partial<LineEvent>) => void;
   /** Atomically replace one event with one or more new events (single undo entry) */
   replaceEvent: (lineIndex: number, oldEventIndex: number, newEvents: LineEvent[]) => void;
 
-  // ---- Event layer mutations ----
+  // ---- Event layer mutations (RPE multi-layer events) ----
+  /** Add an event to a specific RPE event layer. Creates the layer if needed. Pushes undo. */
   addEventToLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, event: LineEvent) => void;
+  /** Remove events from a specific RPE event layer. Pushes undo. */
   removeEventsFromLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, eventIndices: number[]) => void;
+  /** Edit a single event within a specific RPE event layer. Pushes undo. */
   editEventInLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, eventIndex: number, changes: Partial<LineEvent>) => void;
+  /** Ensure a line has at least one event_layers entry (creates empty layers if missing). */
   ensureEventLayers: (lineIndex: number) => void;
+  /** Batch-add events to a specific event layer as a single undo entry */
+  batchAddEventsToLayer: (lineIndex: number, layerIndex: number, kind: LineEventKind, events: LineEvent[]) => void;
 
   // ---- Curve note track mutations ----
   addCurveNoteTrack: (lineIndex: number, track: CurveNoteTrack) => void;
@@ -208,7 +287,9 @@ export interface ChartState {
   setChartFontFamily: (family: string | null) => void;
 
   // ---- Undo/redo ----
+  /** Revert to previous chart state. Moves current state to _future stack. */
   undo: () => void;
+  /** Re-apply a previously undone change. Moves state from _future to _past. */
   redo: () => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
@@ -217,6 +298,9 @@ export interface ChartState {
   totalNoteCount: () => number;
   totalEventCount: () => number;
   getChartJson: () => string;
+
+  // ---- Diff summary (stub — no original chart snapshot yet) ----
+  getDiffSummary: () => { linesAdded: number; linesRemoved: number; notesAdded: number; notesRemoved: number; eventsAdded: number; eventsRemoved: number } | null;
 }
 
 // ============================================================
@@ -234,6 +318,8 @@ export const useChartStore = create<ChartState>()((set, get) => ({
   chart: structuredClone(DEFAULT_CHART),
   _past: [],
   _future: [],
+  _pastSeqs: [],
+  _futureSeqs: [],
   illustrationImage: null,
   lineTextures: new Map<string, Blob>(),
   extraConfig: { ...DEFAULT_EXTRA_CONFIG },
@@ -254,6 +340,8 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       isLoaded: true,
       _past: [],
       _future: [],
+      _pastSeqs: [],
+      _futureSeqs: [],
       lineTextures: new Map<string, Blob>(),
       chartFontFamily: null,
     });
@@ -264,14 +352,18 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       projectPath: null,
       musicPath: null,
       illustrationPath: null,
+      illustrationImage: null, // Clear the illustration HTMLImageElement reference
       meta: { ...DEFAULT_META },
       chart: structuredClone(DEFAULT_CHART),
       isDirty: false,
       isLoaded: false,
       _past: [],
       _future: [],
+      _pastSeqs: [],
+      _futureSeqs: [],
       lineTextures: new Map<string, Blob>(),
       chartFontFamily: null,
+      extraConfig: { ...DEFAULT_EXTRA_CONFIG },
     }),
 
   markClean: () => set({ isDirty: false }),
@@ -289,8 +381,8 @@ export const useChartStore = create<ChartState>()((set, get) => ({
   setMeta: (changes) =>
     set(
       produce((state: ChartState) => {
+        pushHistory(state);
         Object.assign(state.meta, changes);
-        state.isDirty = true;
       }),
     ),
 
@@ -421,7 +513,8 @@ export const useChartStore = create<ChartState>()((set, get) => ({
             Object.assign(line.notes[idx], changes);
           }
         }
-        sortNotes(line.notes);
+        // Only sort if beat was changed — skip for non-beat edits (x, kind, alpha, etc.)
+        if ("beat" in changes) sortNotes(line.notes);
       }),
     ),
 
@@ -446,12 +539,15 @@ export const useChartStore = create<ChartState>()((set, get) => ({
         const line = state.chart.lines[lineIndex];
         if (!line || edits.length === 0) return;
         pushHistory(state);
+        let beatChanged = false;
         for (const { noteIndex, changes } of edits) {
           if (noteIndex >= 0 && noteIndex < line.notes.length) {
             Object.assign(line.notes[noteIndex], changes);
+            if ("beat" in changes) beatChanged = true;
           }
         }
-        sortNotes(line.notes);
+        // Only sort if any beat was changed — skip for non-beat edits (x, kind, alpha, etc.)
+        if (beatChanged) sortNotes(line.notes);
       }),
     ),
 
@@ -500,6 +596,13 @@ export const useChartStore = create<ChartState>()((set, get) => ({
                 line.events.splice(idx, 1);
               }
             }
+          }
+          if (mut.newNotes && mut.newNotes.length > 0) {
+            for (const note of mut.newNotes) {
+              if (!note.uid) note.uid = generateNoteUid();
+              line.notes.push(note);
+            }
+            sortNotes(line.notes);
           }
           if (mut.newEvents) {
             line.events.push(...mut.newEvents);
@@ -563,6 +666,7 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       produce((state: ChartState) => {
         if (state._past.length === 0) return;
         state._future.push(current(state.chart));
+        state._futureSeqs.push(state._pastSeqs.pop()!);
         state.chart = state._past.pop()!;
         state.isDirty = true;
       }),
@@ -573,6 +677,7 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       produce((state: ChartState) => {
         if (state._future.length === 0) return;
         state._past.push(current(state.chart));
+        state._pastSeqs.push(state._futureSeqs.pop()!);
         state.chart = state._future.pop()!;
         state.isDirty = true;
       }),
@@ -594,6 +699,9 @@ export const useChartStore = create<ChartState>()((set, get) => ({
   },
 
   getChartJson: () => JSON.stringify(get().chart),
+
+  // Stub — no original chart snapshot for diffing yet
+  getDiffSummary: () => null,
 
   // ---- Event layer mutations ----
 
@@ -651,6 +759,21 @@ export const useChartStore = create<ChartState>()((set, get) => ({
           pushHistory(state);
           line.event_layers = [createEmptyLayer()];
         }
+      }),
+    ),
+
+  // Batch-add events to a specific event layer (single undo entry)
+  batchAddEventsToLayer: (lineIndex, layerIndex, kind, events) =>
+    set(
+      produce((state: ChartState) => {
+        const line = state.chart.lines[lineIndex];
+        if (!line || !line.event_layers) return;
+        if (layerIndex < 0 || layerIndex >= line.event_layers.length) return;
+        if (events.length === 0) return;
+        pushHistory(state);
+        const layerEvents = getLayerEvents(line.event_layers[layerIndex], kind);
+        layerEvents.push(...events);
+        sortEvents(layerEvents);
       }),
     ),
 

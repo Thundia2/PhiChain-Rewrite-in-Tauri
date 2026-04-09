@@ -13,11 +13,14 @@ export interface StoredProject {
   meta: ProjectMeta;
   audioBlob: ArrayBuffer | null;
   audioExt: string | null;
+  // Illustration image data — added in DB_VERSION 2.
+  // Older entries loaded from v1 will have this field as undefined (treated as null).
+  illustrationBlob: ArrayBuffer | null;
   savedAt: number;
 }
 
 const DB_NAME = "phichain-projects";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Bumped from 1 → 2 to add illustrationBlob field
 const STORE_NAME = "projects";
 
 function openDb(): Promise<IDBDatabase> {

@@ -27,6 +27,32 @@ use phichain_chart::migration;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Validate that a path doesn't contain path traversal sequences.
+fn validate_path(path: &str) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+
+    // Reject paths with traversal components
+    for component in path_buf.components() {
+        if let std::path::Component::ParentDir = component {
+            return Err("Path must not contain '..' components".to_string());
+        }
+    }
+
+    // Resolve to absolute path
+    let canonical = std::fs::canonicalize(&path_buf)
+        .or_else(|_| {
+            // For new directories that don't exist yet, validate the parent
+            if let Some(parent) = path_buf.parent() {
+                std::fs::canonicalize(parent).map(|p| p.join(path_buf.file_name().unwrap_or_default()))
+            } else {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Invalid path"))
+            }
+        })
+        .map_err(|e| format!("Invalid path: {}", e))?;
+
+    Ok(canonical)
+}
+
 /// The data the frontend receives when loading a project.
 /// Contains the chart JSON (which the frontend parses into its own types)
 /// plus the project metadata (song name, charter, etc.).
@@ -55,10 +81,11 @@ pub struct ProjectData {
 /// which handles validation and error reporting.
 #[tauri::command]
 pub fn load_project(path: String) -> Result<ProjectData, String> {
-    let project_path = ProjectPath(PathBuf::from(&path));
+    let validated = validate_path(&path)?;
+    let project_path = ProjectPath(validated.clone());
 
     // Open the project using the existing phichain-chart code
-    let project = Project::open(PathBuf::from(&path))
+    let project = Project::open(validated)
         .map_err(|e| format!("Failed to open project: {}", e))?;
 
     // Read the chart JSON file
@@ -97,7 +124,8 @@ pub fn load_project(path: String) -> Result<ProjectData, String> {
 /// backend doesn't define. These are valid chart data that must be preserved.
 #[tauri::command]
 pub fn save_project(project_path: String, chart_json: String) -> Result<(), String> {
-    let chart_path = PathBuf::from(&project_path).join("chart.json");
+    let validated = validate_path(&project_path)?;
+    let chart_path = validated.join("chart.json");
 
     // Validate that the input is well-formed JSON with expected structure
     let json_value: serde_json::Value = serde_json::from_str(&chart_json)
@@ -132,7 +160,7 @@ pub fn create_project(
     music_source: String,
     illustration_source: Option<String>,
 ) -> Result<(), String> {
-    let project_dir = PathBuf::from(&path);
+    let project_dir = validate_path(&path)?;
 
     // Create the directory if it doesn't exist
     std::fs::create_dir_all(&project_dir)
@@ -142,7 +170,9 @@ pub fn create_project(
     let meta: ProjectMeta = serde_json::from_str(&meta_json)
         .map_err(|e| format!("Invalid metadata: {}", e))?;
     let meta_path = project_dir.join("meta.json");
-    std::fs::write(meta_path, serde_json::to_string_pretty(&meta).unwrap())
+    let meta_json_str = serde_json::to_string_pretty(&meta)
+        .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+    std::fs::write(meta_path, meta_json_str)
         .map_err(|e| format!("Failed to write meta.json: {}", e))?;
 
     // Write default chart

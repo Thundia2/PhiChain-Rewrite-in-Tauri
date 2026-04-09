@@ -13,15 +13,11 @@ import { useAudioStore } from "../../stores/audioStore";
 import { BpmList } from "../../utils/bpmList";
 import { getClipboard } from "../../hooks/useClipboard";
 import { beatToFloat, floatToBeat } from "../../types/chart";
-import type { Note, LineEvent, Beat } from "../../types/chart";
+import type { Note, LineEvent } from "../../types/chart";
 
 interface Props {
   open: boolean;
   onClose: () => void;
-}
-
-function offsetBeat(beat: Beat, delta: number): Beat {
-  return floatToBeat(Math.max(0, beatToFloat(beat) + delta));
 }
 
 export function PasteSpecialDialog({ open, onClose }: Props) {

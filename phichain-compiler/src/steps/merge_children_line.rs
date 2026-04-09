@@ -5,14 +5,14 @@ use phichain_chart::easing::Easing;
 use phichain_chart::event::{LineEvent, LineEventKind, LineEventValue};
 use phichain_chart::serialization::{PhichainChart, SerializedLine};
 
-fn merge(parent: SerializedLine) -> Vec<SerializedLine> {
+fn merge(mut parent: SerializedLine) -> Vec<SerializedLine> {
     if parent.children.is_empty() {
         vec![parent]
     } else {
-        let children = parent
-            .children
-            .iter()
-            .flat_map(|x| merge(x.clone()))
+        let owned_children = std::mem::take(&mut parent.children);
+        let children = owned_children
+            .into_iter()
+            .flat_map(merge)
             .collect::<Vec<_>>();
 
         let mut merged_children = vec![];

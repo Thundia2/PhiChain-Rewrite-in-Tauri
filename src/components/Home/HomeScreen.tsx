@@ -165,6 +165,16 @@ async function handleOpenRecent(project: RecentProject) {
       const url = URL.createObjectURL(blob);
       await audioEngine.load(url, stored.audioExt);
       useAudioStore.getState().setMusicLoaded(true);
+      // Track the blob URL + format so tab session restore can reuse it
+      const { setAudioBlobUrl } = await import("../../utils/chartSessions");
+      setAudioBlobUrl(url, stored.audioExt);
+    }
+
+    // Restore illustration from saved blob (if available)
+    if (stored.illustrationBlob) {
+      const illuBlob = new Blob([stored.illustrationBlob]);
+      const illuUrl = URL.createObjectURL(illuBlob);
+      await cs.loadIllustration(illuUrl);
     }
 
     useEditorStore.getState().selectLine(0);

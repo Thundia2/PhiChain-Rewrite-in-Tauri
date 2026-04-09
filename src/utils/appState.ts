@@ -4,6 +4,11 @@
 // Saves/restores the UI layout and preferences to app-state.json
 // via appStorage. This lets the editor reopen where you left off.
 //
+// Recent change: Fixed restoreAppState() to recognize unified_editor
+// and unrolled_editor as chart-like tabs. Previously only "chart" was
+// checked, so projects opened in unified/unrolled view were never
+// reloaded on app restart (tab appeared but chart data was empty).
+//
 // Usage:
 //   await restoreAppState();   // on startup
 //   saveAppStateDebounced();   // on state changes
@@ -37,6 +42,7 @@ interface AppStateData {
     timelineZoom: number;
     density: number;
     lanes: number;
+    xSnapEnabled?: boolean;
     activeTool: EditorTool;
     playbackRate: number;
     noteSideFilter: NoteSideFilter;
@@ -80,6 +86,7 @@ export async function saveAppState(): Promise<void> {
         timelineZoom: editorState.timelineZoom,
         density: editorState.density,
         lanes: editorState.lanes,
+        xSnapEnabled: editorState.xSnapEnabled,
         activeTool: editorState.activeTool,
         playbackRate: audioState.playbackRate,
         noteSideFilter: editorState.noteSideFilter,
@@ -109,6 +116,7 @@ export async function restoreAppState(): Promise<string | null> {
       es.setTimelineZoom(data.editorPrefs.timelineZoom);
       es.setDensity(data.editorPrefs.density);
       es.setLanes(data.editorPrefs.lanes);
+      if (data.editorPrefs.xSnapEnabled) es.toggleXSnap(); // Restore X snap state
       es.setTool(data.editorPrefs.activeTool);
       es.setNoteSideFilter(data.editorPrefs.noteSideFilter);
       if (data.editorPrefs.playbackRate) {
@@ -120,8 +128,10 @@ export async function restoreAppState(): Promise<string | null> {
     // Restore non-chart tabs (chart tabs need the project loaded first)
     const tabState = useTabStore.getState();
     for (const tab of data.tabs) {
-      // Skip home (already exists), chart, and line_event_editor tabs
-      if (tab.id === "home" || tab.type === "chart" || tab.type === "line_event_editor") {
+      // Skip all chart-like tabs — they need the project loaded first.
+      // restoreAppState() returns lastProjectPath so the caller (main.tsx)
+      // can reload the project and then open the appropriate chart tab.
+      if (tab.id === "home" || tab.type === "chart" || tab.type === "line_event_editor" || tab.type === "unified_editor" || tab.type === "unrolled_editor") {
         continue;
       }
       tabState.openTab({
@@ -135,14 +145,14 @@ export async function restoreAppState(): Promise<string | null> {
 
     // If the active tab was a non-chart tab, switch to it
     const wasChartActive = data.tabs.some(
-      (t) => t.id === data.activeTabId && (t.type === "chart" || t.type === "line_event_editor"),
+      (t) => t.id === data.activeTabId && (t.type === "chart" || t.type === "line_event_editor" || t.type === "unified_editor" || t.type === "unrolled_editor"),
     );
     if (!wasChartActive && data.activeTabId !== "home") {
       tabState.setActiveTab(data.activeTabId);
     }
 
     // Return last project path so the caller can reload the chart
-    const hadChartTab = data.tabs.some((t) => t.type === "chart");
+    const hadChartTab = data.tabs.some((t) => t.type === "chart" || t.type === "unified_editor" || t.type === "unrolled_editor");
     if (hadChartTab && data.lastProjectPath) {
       return data.lastProjectPath;
     }

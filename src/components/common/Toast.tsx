@@ -9,6 +9,7 @@ const TYPE_COLORS: Record<Toast["type"], string> = {
   error: "#ff4a6a",
   info: "#6c8aff",
   success: "#4aff7a",
+  warning: "#ffb74d",
 };
 
 function ToastItem({ toast }: { toast: Toast }) {

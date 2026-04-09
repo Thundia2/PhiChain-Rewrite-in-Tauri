@@ -30,7 +30,7 @@ export async function extractMetadataFromFile(file: File): Promise<AudioMetadata
   try {
     const { parseBlob, selectCover } = await import("music-metadata");
     const metadata = await parseBlob(file);
-    return mapMetadata(metadata, selectCover);
+    return mapMetadata(metadata, selectCover as CoverSelector);
   } catch {
     return EMPTY;
   }
@@ -47,18 +47,21 @@ export async function extractMetadataFromPath(filePath: string): Promise<AudioMe
     const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
     const { parseBuffer, selectCover } = await import("music-metadata");
     const metadata = await parseBuffer(data, { mimeType: MIME_HINTS[ext] });
-    return mapMetadata(metadata, selectCover);
+    return mapMetadata(metadata, selectCover as CoverSelector);
   } catch {
     return EMPTY;
   }
 }
 
+// Type for the selectCover function from music-metadata (avoids IPicture import issues)
+type CoverSelector = (pictures?: unknown[]) => { data: Uint8Array | Buffer; format: string } | null;
+
 function mapMetadata(
   metadata: { common: { title?: string; artist?: string; picture?: unknown[] } },
-  selectCover: (pictures?: unknown[]) => { data: Buffer | Uint8Array; format: string } | null,
+  selectCover: CoverSelector,
 ): AudioMetadata {
   const { common } = metadata;
-  const cover = selectCover(common.picture as Parameters<typeof selectCover>[0]);
+  const cover = selectCover(common.picture);
   return {
     title: common.title ?? null,
     artist: common.artist ?? null,

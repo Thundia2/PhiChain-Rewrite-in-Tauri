@@ -10,7 +10,7 @@ import { create } from "zustand";
 export interface Toast {
   id: string;
   message: string;
-  type: "error" | "info" | "success";
+  type: "error" | "info" | "success" | "warning";
   duration: number;
 }
 
@@ -35,6 +35,7 @@ const DEFAULT_DURATION: Record<Toast["type"], number> = {
   error: 4000,
   info: 3000,
   success: 3000,
+  warning: 3500,
 };
 
 export const useToastStore = create<ToastState>()((set) => ({

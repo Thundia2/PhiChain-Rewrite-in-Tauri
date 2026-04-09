@@ -35,6 +35,9 @@ export function TransportBar() {
   const playbackRate = useAudioStore((s) => s.playbackRate);
   const setPlaybackRate = useAudioStore((s) => s.setPlaybackRate);
   const duration = useAudioStore((s) => s.duration);
+  const loopEnabled = useAudioStore((s) => s.loopEnabled);
+  const loopStartBeat = useAudioStore((s) => s.loopStartBeat);
+  const loopEndBeat = useAudioStore((s) => s.loopEndBeat);
 
   const [metronome, setMetronome] = useState(false);
   const [displayTime, setDisplayTime] = useState(0);
@@ -173,6 +176,92 @@ export function TransportBar() {
         <span style={{ fontSize: 12 }}>{"\u2669"}</span>
         <span>Metro</span>
       </button>
+
+      {/* ── Divider ── */}
+      <div style={{ width: 1, height: 16, background: "var(--border-color)", margin: "0 8px" }} />
+
+      {/* ── Loop controls ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+        {/* Loop toggle */}
+        <button
+          onClick={() => useAudioStore.getState().toggleLoop()}
+          style={{
+            display: "flex", alignItems: "center", gap: 3,
+            padding: "3px 7px", borderRadius: 6, border: "none", cursor: "pointer",
+            fontSize: 10, fontFamily: "inherit",
+            background: loopEnabled ? "rgba(108, 138, 255, 0.08)" : "transparent",
+            color: loopEnabled ? "var(--accent-primary)" : "var(--text-muted)",
+            transition: "all 0.15s",
+          }}
+          title="Toggle loop (\\)"
+        >
+          <span style={{ fontSize: 12 }}>{"\u21BB"}</span>
+          <span>Loop</span>
+        </button>
+
+        {/* Set loop start */}
+        <button
+          onClick={() => {
+            const cs = useChartStore.getState();
+            const bpmList = new BpmList(cs.chart.bpm_list);
+            const beat = bpmList.beatAtFloat(useAudioStore.getState().currentTime - cs.chart.offset);
+            useAudioStore.getState().setLoopStart(beat);
+          }}
+          style={{
+            padding: "3px 6px", borderRadius: 4, border: "none", cursor: "pointer",
+            fontSize: 9, fontFamily: "inherit",
+            background: loopStartBeat !== null ? "rgba(108, 138, 255, 0.08)" : "transparent",
+            color: loopStartBeat !== null ? "var(--accent-primary)" : "var(--text-muted)",
+            transition: "all 0.15s",
+          }}
+          title={loopStartBeat !== null ? `Loop start: beat ${loopStartBeat.toFixed(2)} ([)` : "Set loop start ([)"}
+        >
+          [{loopStartBeat !== null ? ` ${loopStartBeat.toFixed(1)}` : ""}
+        </button>
+
+        {/* Set loop end */}
+        <button
+          onClick={() => {
+            const cs = useChartStore.getState();
+            const bpmList = new BpmList(cs.chart.bpm_list);
+            const beat = bpmList.beatAtFloat(useAudioStore.getState().currentTime - cs.chart.offset);
+            useAudioStore.getState().setLoopEnd(beat);
+          }}
+          style={{
+            padding: "3px 6px", borderRadius: 4, border: "none", cursor: "pointer",
+            fontSize: 9, fontFamily: "inherit",
+            background: loopEndBeat !== null ? "rgba(108, 138, 255, 0.08)" : "transparent",
+            color: loopEndBeat !== null ? "var(--accent-primary)" : "var(--text-muted)",
+            transition: "all 0.15s",
+          }}
+          title={loopEndBeat !== null ? `Loop end: beat ${loopEndBeat.toFixed(2)} (])` : "Set loop end (])"}
+        >
+          {loopEndBeat !== null ? `${loopEndBeat.toFixed(1)} ` : ""}]
+        </button>
+
+        {/* Clear loop — only show when start or end is set */}
+        {(loopStartBeat !== null || loopEndBeat !== null) && (
+          <button
+            onClick={() => useAudioStore.getState().clearLoop()}
+            style={{
+              padding: "3px 5px", borderRadius: 4, border: "none", cursor: "pointer",
+              fontSize: 9, fontFamily: "inherit",
+              background: "transparent", color: "var(--text-muted)",
+              transition: "all 0.15s",
+            }}
+            title="Clear loop markers"
+          >
+            {"\u2715"}
+          </button>
+        )}
+
+        {/* Loop range display when both bounds are set and loop is active */}
+        {loopEnabled && loopStartBeat !== null && loopEndBeat !== null && (
+          <span style={{ fontSize: 9, color: "var(--accent-primary)", marginLeft: 2, fontFamily: "var(--font-mono, monospace)" }}>
+            {"\u27F2"} {loopStartBeat.toFixed(1)}{"\u2013"}{loopEndBeat.toFixed(1)}
+          </span>
+        )}
+      </div>
 
       {/* ── Spacer ── */}
       <div style={{ flex: 1 }} />

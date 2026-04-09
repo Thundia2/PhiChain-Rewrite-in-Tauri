@@ -5,6 +5,11 @@
 // significantly change the curve shape.
 // ============================================================
 
+export interface SimplifiableKeyframe {
+  beat: number;
+  value: number;
+}
+
 /**
  * Simplify a recorded keyframe array using Ramer-Douglas-Peucker.
  *
@@ -38,6 +43,17 @@ export function simplifyKeyframes(
   } else {
     return [first, last];
   }
+}
+
+/**
+ * Preview the result of simplification without creating the full output.
+ * Returns just the count of keyframes that would remain.
+ */
+export function previewSimplification(
+  keyframes: Array<{ beat: number; value: number }>,
+  epsilon: number,
+): number {
+  return simplifyKeyframes(keyframes, epsilon).length;
 }
 
 function perpendicularDistance(

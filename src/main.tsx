@@ -8,13 +8,16 @@ import { useEditorStore } from "./stores/editorStore";
 import { useTabStore } from "./stores/tabStore";
 import { useRespackStore } from "./stores/respackStore";
 import { useSettingsStore } from "./stores/settingsStore";
+import { useFavoritesStore } from "./stores/favoritesStore";
 import { audioEngine } from "./audio/audioEngine";
 import { initAutosave } from "./utils/autosave";
 import { restoreAppState, saveAppState, saveAppStateDebounced } from "./utils/appState";
 import { loadProject, isTauri } from "./utils/ipc";
+import { registerSession, setSkipNextRestore, setAudioBlobUrl } from "./utils/chartSessions";
 
 // ---- 1. Load settings from disk (async, non-blocking) ----
 useSettingsStore.getState().loadSettings();
+useFavoritesStore.getState().loadFavorites();
 
 // ---- 2. Sync music volume setting → audio engine in real time ----
 {
@@ -45,6 +48,8 @@ restoreAppState()
             const ext = data.music_path.split(".").pop()?.toLowerCase() ?? "mp3";
             await audioEngine.load(musicUrl, ext);
             useAudioStore.getState().setMusicLoaded(true);
+            // Track the blob URL + format so session save captures correct data
+            setAudioBlobUrl(musicUrl, ext);
           } catch (err) {
             console.warn("Failed to load music on restore:", err);
           }
@@ -61,10 +66,13 @@ restoreAppState()
           }
         }
 
-        // Re-open the chart tab
+        // Re-open the chart tab and register its session (consistent with
+        // importChart, NewProjectDialog, and HomeScreen entry points)
         useTabStore
           .getState()
           .openChart(lastProjectPath, data.meta.name || "Untitled Chart");
+        setSkipNextRestore();
+        registerSession(useTabStore.getState().getChartTabId(lastProjectPath));
       } catch (err) {
         console.warn("Failed to restore last project:", err);
       }
@@ -88,6 +96,7 @@ useEditorStore.subscribe((state, prevState) => {
     state.timelineZoom !== prevState.timelineZoom ||
     state.density !== prevState.density ||
     state.lanes !== prevState.lanes ||
+    state.xSnapEnabled !== prevState.xSnapEnabled ||
     state.activeTool !== prevState.activeTool ||
     state.noteSideFilter !== prevState.noteSideFilter
   ) {
@@ -113,8 +122,23 @@ useChartStore.subscribe((state, prevState) => {
 if (isTauri()) {
   import("@tauri-apps/api/window")
     .then(({ getCurrentWindow }) => {
-      getCurrentWindow().onCloseRequested(async () => {
-        await saveAppState();
+      getCurrentWindow().onCloseRequested(async (event) => {
+        // Check for unsaved changes before allowing close
+        const cs = useChartStore.getState();
+        if (cs.isDirty) {
+          event.preventDefault();
+          // Dynamic import: showConfirm requires ConfirmDialog to be mounted (React ready)
+          const { showConfirm } = await import("./components/common/ConfirmDialog");
+          const confirmed = await showConfirm("You have unsaved changes. Quit anyway?");
+          if (confirmed) {
+            await saveAppState();
+            // Use destroy() instead of close() to avoid re-triggering this handler
+            getCurrentWindow().destroy();
+          }
+          // If cancelled, do nothing — window stays open
+        } else {
+          await saveAppState();
+        }
       });
     })
     .catch(() => {
@@ -147,20 +171,22 @@ useRespackStore
     console.warn("Failed to initialize respacks from IndexedDB:", err);
   });
 
-// Suppress known warnings from react-mosaic-component's react-dnd dependency
-// which hasn't been updated for React 19. These are cosmetic and don't affect
+// Suppress known warning from react-mosaic-component's react-dnd dependency
+// which hasn't been updated for React 19. This is cosmetic and doesn't affect
 // functionality. Remove this once react-mosaic-component updates react-dnd.
 const origConsoleError = console.error;
 console.error = (...args: unknown[]) => {
   const msg = typeof args[0] === "string" ? args[0] : "";
-  if (
-    msg.includes("Accessing element.ref was removed in React 19") ||
-    msg.includes("Each child in a list should have a unique")
-  ) {
+  if (msg.includes("Accessing element.ref was removed in React 19")) {
     return;
   }
   origConsoleError.apply(console, args);
 };
+
+// ---- Global unhandled rejection handler ----
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("Unhandled promise rejection:", event.reason);
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -86,6 +86,7 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
   }, [value]);
 
   // Draw hue ring
+  const hue = hsl[0];
   useEffect(() => {
     const canvas = wheelCanvasRef.current;
     if (!canvas) return;
@@ -108,7 +109,7 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
     }
 
     // Hue indicator
-    const hueRad = ((hsl[0] - 90) * Math.PI) / 180;
+    const hueRad = ((hue - 90) * Math.PI) / 180;
     const indicR = (outerR + innerR) / 2;
     const ix = cx + Math.cos(hueRad) * indicR;
     const iy = cy + Math.sin(hueRad) * indicR;
@@ -117,7 +118,7 @@ export function ColorPicker({ value, onChange, onClose }: ColorPickerProps) {
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 2;
     ctx.stroke();
-  }, [hsl[0]]);
+  }, [hue]);
 
   // Draw saturation/lightness square
   useEffect(() => {

@@ -1,3 +1,13 @@
+// ============================================================
+// Inspector Panel — Property editor for notes, events, and lines
+//
+// Renders editable fields for the current selection: note
+// properties (beat, x, kind, speed, hold), event properties
+// (start/end beat, value, easing), and line settings (name,
+// texture, hierarchy). Auto-switches between note, event, and
+// line inspector views based on the active editor selection.
+// ============================================================
+
 import { useMemo, useEffect, useRef, useState } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";

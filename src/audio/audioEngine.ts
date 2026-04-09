@@ -6,11 +6,17 @@
 //
 // When no music is loaded, playback still works via a manual
 // timer so the timeline/preview can be previewed without audio.
+//
+// Recent change: Replaced `new BpmList()` with `getCachedBpmList()`
+// in the RAF tick loop. Previously BpmList was reconstructed every
+// frame (60x/sec) when loop mode was active.
 // ============================================================
 
 import { Howl } from "howler";
 import { useAudioStore } from "../stores/audioStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useChartStore } from "../stores/chartStore";
+import { getCachedBpmList } from "../stores/chartStore";
 
 class AudioEngine {
   private howl: Howl | null = null;
@@ -18,6 +24,8 @@ class AudioEngine {
   private _loaded = false;
   private _volume = 1.0;
   private _soundId: number | null = null;
+  /** URL of the currently loaded audio file (for onset detection) */
+  private _currentUrl: string | null = null;
 
   /** For timer-based playback when no audio is loaded */
   private lastFrameTime = 0;
@@ -34,11 +42,15 @@ class AudioEngine {
    *                 since they have no file extension for Howler to detect from.
    */
   load(src: string, format?: string): Promise<void> {
-    return this._loadWithMode(src, format, true).catch(() => {
-      // HTML5 audio failed (e.g. MEDIA_ERR_SRC_NOT_SUPPORTED / code 4).
-      // Retry with Web Audio API decoding which handles more MP3 variants.
-      console.warn("[AudioEngine] HTML5 audio failed, retrying with Web Audio API decode…");
-      return this._loadWithMode(src, format, false);
+    // Blob URLs (from zip/pez imports) have the entire file in memory.
+    // Use Web Audio API (html5: false) for these — it fully decodes the
+    // audio buffer, so duration is always accurate. HTML5 audio elements
+    // may report a truncated duration before metadata finishes loading,
+    // causing playback to stop prematurely.
+    const preferHtml5 = !src.startsWith("blob:");
+    return this._loadWithMode(src, format, preferHtml5).catch(() => {
+      console.warn("[AudioEngine] Audio load failed, retrying with alternate mode…");
+      return this._loadWithMode(src, format, !preferHtml5);
     });
   }
 
@@ -58,6 +70,7 @@ class AudioEngine {
         volume: this._volume * this._volume * this._volume,
         onload: () => {
           this._loaded = true;
+          this._currentUrl = src; // Set after successful load (not before unload() clears it)
           const duration = this.howl?.duration() ?? 0;
           useAudioStore.getState().setDuration(duration);
           resolve();
@@ -83,6 +96,7 @@ class AudioEngine {
     }
     this._soundId = null;
     this._loaded = false;
+    this._currentUrl = null;
     const store = useAudioStore.getState();
     store.setDuration(0);
     store.setCurrentTime(0);
@@ -166,7 +180,11 @@ class AudioEngine {
     this._volume = linear;
     const actual = linear * linear * linear;
     if (this.howl) {
-      this.howl.volume(actual, this._soundId ?? undefined);
+      if (this._soundId !== null) {
+        this.howl.volume(actual, this._soundId);
+      } else {
+        this.howl.volume(actual);
+      }
     }
   }
 
@@ -191,25 +209,41 @@ class AudioEngine {
         return;
       }
 
+      let time: number;
       if (this.howl && this._loaded) {
-        // Audio-driven: read position from Howler
-        const time = this.getCurrentTime();
-        store.setCurrentTime(time);
-
-        // Stop at end of audio
-        if (store.duration > 0 && time >= store.duration) {
-          this.pause();
-          return;
-        }
+        // Audio-driven: read position from Howler.
+        // Howler's onend callback handles natural end-of-audio (pause + stopTimeSync).
+        // No manual duration check here — Howler may report an inaccurate duration
+        // for blob URLs, which would cause playback to stop prematurely.
+        time = this.getCurrentTime();
       } else {
         // Timer-driven: advance time manually using playback rate
         const now = performance.now();
         const delta = (now - this.lastFrameTime) / 1000;
         this.lastFrameTime = now;
-        const newTime = store.currentTime + delta * store.playbackRate;
-        store.setCurrentTime(newTime);
+        time = store.currentTime + delta * store.playbackRate;
       }
 
+      // ---- Loop region: seek back to loop start when we reach loop end ----
+      if (store.loopEnabled && store.loopStartBeat !== null && store.loopEndBeat !== null) {
+        try {
+          const cs = useChartStore.getState();
+          // Use cached BpmList — avoids O(n) construction 60x/sec in loop mode
+          const bpmList = getCachedBpmList();
+          const loopEndSec = bpmList.timeAtFloat(store.loopEndBeat) + cs.chart.offset;
+          if (time >= loopEndSec) {
+            const loopStartSec = bpmList.timeAtFloat(store.loopStartBeat) + cs.chart.offset;
+            this.seek(loopStartSec);
+            store.setCurrentTime(loopStartSec);
+            this.rafId = requestAnimationFrame(tick);
+            return;
+          }
+        } catch {
+          // BpmList construction may fail if chart isn't loaded — ignore silently
+        }
+      }
+
+      store.setCurrentTime(time);
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
@@ -220,6 +254,11 @@ class AudioEngine {
       cancelAnimationFrame(this.rafId);
       this.rafId = 0;
     }
+  }
+
+  /** Get the URL of the currently loaded audio (for onset detection analysis). */
+  getCurrentUrl(): string | null {
+    return this._currentUrl;
   }
 }
 

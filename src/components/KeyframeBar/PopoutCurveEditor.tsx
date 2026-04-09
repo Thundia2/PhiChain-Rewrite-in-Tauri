@@ -50,6 +50,7 @@ export function PopoutCurveEditor() {
     root.style.height = "100vh";
     win.document.body.appendChild(root);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMountEl(root);
 
     win.addEventListener("beforeunload", () => {

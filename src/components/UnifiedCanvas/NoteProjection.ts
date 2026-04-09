@@ -16,6 +16,7 @@ import type { Line, Beat } from "../../types/chart";
 import { CANVAS_WIDTH } from "../../types/chart";
 import { distanceAt } from "../../canvas/events";
 import { snapBeat } from "../../utils/beat";
+import { snapX } from "../../utils/xSnap";
 import type { BpmList } from "../../utils/bpmList";
 
 // ============================================================
@@ -208,6 +209,7 @@ export function projectClickToNote(
   canvasWidth: number,
   canvasHeight: number,
   density: number,
+  xSnapDivisions: number = 0, // 0 = no snap, >0 = snap to this many divisions
 ): NotePlacementResult | null {
   // Step 1: Transform to line-local coordinates
   const local = screenToLineLocal(
@@ -229,8 +231,9 @@ export function projectClickToNote(
     density,
   );
 
-  // Step 3: Clamp noteX to reasonable range
-  const x = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, Math.round(local.noteX)));
+  // Step 3: Clamp and snap noteX
+  const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
+  const x = xSnapDivisions > 0 ? snapX(rawX, xSnapDivisions) : Math.round(rawX);
 
   return {
     beat,
@@ -263,6 +266,7 @@ export function computeGhostNote(
   canvasHeight: number,
   density: number,
   noteKind: string,
+  xSnapDivisions: number = 0, // 0 = no snap, >0 = snap to this many divisions
 ): { beat: Beat; x: number; kind: string; above: boolean } | null {
   const result = projectClickToNote(
     mouseX, mouseY,
@@ -271,6 +275,7 @@ export function computeGhostNote(
     currentTime, bpmList,
     canvasWidth, canvasHeight,
     density,
+    xSnapDivisions, // Pass through
   );
 
   if (!result) return null;

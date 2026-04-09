@@ -276,7 +276,7 @@ impl Format for OfficialChart {
         Self: Sized,
     {
         fn cut_event(event: primitive::event::LineEvent) -> Vec<primitive::event::LineEvent> {
-            if event.start == event.end {
+            if (event.start - event.end).abs() < f32::EPSILON {
                 return vec![event];
             }
             if matches!(event.easing, Easing::Linear) && !event.kind.is_speed() {

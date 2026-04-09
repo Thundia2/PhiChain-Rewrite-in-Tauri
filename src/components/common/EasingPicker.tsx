@@ -6,7 +6,7 @@
 // ============================================================
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useSettingsStore } from "../../stores/settingsStore";
+import { useFavoritesStore } from "../../stores/favoritesStore";
 
 const EASING_FAMILIES = [
   { name: "Linear", easings: ["linear"] },
@@ -102,10 +102,11 @@ export function EasingPicker({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const recentEasings = useSettingsStore((s) => s.recentEasings);
-  const favoriteEasings = useSettingsStore((s) => s.favoriteEasings);
-  const recordEasingUse = useSettingsStore((s) => s.recordEasingUse);
-  const toggleFavoriteEasing = useSettingsStore((s) => s.toggleFavoriteEasing);
+  // Easing favorites/recents now live in favoritesStore (migrated from settingsStore)
+  const recentEasings = useFavoritesStore((s) => s.recentEasings);
+  const favoriteEasings = useFavoritesStore((s) => s.favoriteEasings);
+  const recordEasingUse = useFavoritesStore((s) => s.recordEasingUse);
+  const toggleFavoriteEasing = useFavoritesStore((s) => s.toggleFavoriteEasing);
 
   const handleSelect = useCallback((easing: string) => {
     onChange(easing);

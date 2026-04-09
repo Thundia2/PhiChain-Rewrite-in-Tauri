@@ -1,14 +1,19 @@
 // ============================================================
 // Line Strip — Horizontal line selector chip bar
 //
+// Recent change: Added note-based activity classification and
+// inactivity timeout. Lines with notes approaching are now active
+// even without opacity. Lines idle for >N seconds (setting) are
+// demoted to inactive. Added wheel-scroll support on the chip bar.
+//
 // 30px tall bar above the canvas with clickable chips for each line.
 // Lines are sorted by activity and color-coded:
-//   - Active (opacity > 0): solid green
+//   - Active (opacity > 0 OR notes approaching): solid green
 //   - Coming soon (within 8 beats): faded green
 //   - Just passed (within 8 beats): yellow
 //   - Long ago passed: faded yellow
 //   - Recurring: blue tint
-//   - Inactive: default gray
+//   - Inactive (no notes for >N seconds): default gray
 // ============================================================
 
 import { useMemo, useRef, useEffect, useCallback } from "react";
@@ -20,6 +25,8 @@ import { useTabStore } from "../../stores/tabStore";
 import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../utils/beat";
+import type { LineEvent, LineEventValue, EventLayer, Note } from "../../types/chart";
+import { useSettingsStore } from "../../stores/settingsStore";
 import { LINE_CATEGORY_COLORS } from "../LineList/lineCategories";
 import { autoCategorize } from "../LineList/lineCategories";
 
@@ -29,9 +36,77 @@ const LOOKAHEAD_BEATS = 8;
 const LOOKBEHIND_BEATS = 8;
 const LONG_PASSED_BEATS = 32;
 
+// Time window (seconds) before a note's beat during which it's considered "approaching" / visible on screen
+const NOTE_APPROACH_WINDOW_SECONDS = 2.5;
+
+/**
+ * Binary search: find the index of the first note whose beat >= targetBeat.
+ * Notes must be sorted by beatToFloat(note.beat) ascending.
+ * Returns notes.length if all notes are before targetBeat.
+ */
+function lowerBoundNoteBeat(notes: Note[], targetBeat: number): number {
+  let lo = 0;
+  let hi = notes.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (beatToFloat(notes[mid].beat) < targetBeat) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+/**
+ * Check if any notes are "falling" near the current beat (within the approach window),
+ * and find the time until the next note (for inactivity timeout).
+ */
+function getNoteProximity(
+  notes: Note[],
+  currentBeat: number,
+  bpmList: BpmList,
+  approachWindowSeconds: number,
+): { hasNotesApproaching: boolean; secondsUntilNextNote: number } {
+  if (notes.length === 0) {
+    return { hasNotesApproaching: false, secondsUntilNextNote: Infinity };
+  }
+
+  const currentTime = bpmList.timeAtFloat(currentBeat);
+
+  // Convert approach window to beat range via BpmList.
+  // Check notes within [currentTime - approachWindow, currentTime + 0.1s].
+  // The +0.1s grace allows notes that just passed to still count briefly.
+  const windowStartBeat = bpmList.beatAtFloat(Math.max(0, currentTime - approachWindowSeconds));
+  const windowEndBeat = bpmList.beatAtFloat(currentTime + 0.1);
+
+  const startIdx = lowerBoundNoteBeat(notes, windowStartBeat);
+  let hasNotesApproaching = false;
+
+  for (let i = startIdx; i < notes.length; i++) {
+    const noteBeat = beatToFloat(notes[i].beat);
+    if (noteBeat > windowEndBeat) break;
+    hasNotesApproaching = true;
+    break;
+  }
+
+  // Find seconds until next note (for inactivity timeout).
+  // Search for the first note at or after currentBeat.
+  const nextIdx = lowerBoundNoteBeat(notes, currentBeat);
+  let secondsUntilNextNote = Infinity;
+
+  if (nextIdx < notes.length) {
+    const nextNoteBeat = beatToFloat(notes[nextIdx].beat);
+    const nextNoteTime = bpmList.timeAtFloat(nextNoteBeat);
+    secondsUntilNextNote = nextNoteTime - currentTime;
+  }
+
+  return { hasNotesApproaching, secondsUntilNextNote };
+}
+
 /** Get all beat ranges where a line has opacity > 0 */
 function getOpacityRanges(
-  events: { kind: string; start_beat: [number, number, number]; end_beat: [number, number, number]; value: any }[],
+  events: { kind: string; start_beat: [number, number, number]; end_beat: [number, number, number]; value: LineEventValue }[],
 ): { start: number; end: number }[] {
   const opacityEvents = events
     .filter((e) => e.kind === "opacity")
@@ -77,11 +152,14 @@ function getOpacityRanges(
   return ranges;
 }
 
-/** Classify a line's activity status at a given beat */
+/** Classify a line's activity status at a given beat, considering both opacity and notes */
 function classifyLine(
-  events: any[],
-  eventLayers: any[] | undefined,
+  events: LineEvent[],
+  eventLayers: EventLayer[] | undefined,
   beat: number,
+  notes: Note[],
+  bpmList: BpmList,
+  inactivityTimeoutSeconds: number,
 ): { activity: LineActivity; isRecurring: boolean; sortKey: number } {
   // Evaluate opacity at current beat
   const state = evaluateLineEventsWithLayers(events, eventLayers, beat);
@@ -91,8 +169,25 @@ function classifyLine(
   const ranges = getOpacityRanges(events);
   const isRecurring = ranges.length > 1;
 
+  // Check note proximity — are notes currently falling on this line?
+  const { hasNotesApproaching, secondsUntilNextNote } = getNoteProximity(
+    notes, beat, bpmList, NOTE_APPROACH_WINDOW_SECONDS,
+  );
+
+  // Priority 1: Opacity-visible lines are always active
   if (isVisible) {
     return { activity: "active", isRecurring, sortKey: 0 };
+  }
+
+  // Priority 2: Lines with notes currently approaching are active (slightly lower sort priority)
+  if (hasNotesApproaching) {
+    return { activity: "active", isRecurring, sortKey: 0.5 };
+  }
+
+  // Priority 3: Inactivity timeout — no note coming for a long time, demote to inactive.
+  // This overrides coming-soon/just-passed opacity classifications when notes are absent.
+  if (inactivityTimeoutSeconds > 0 && secondsUntilNextNote > inactivityTimeoutSeconds) {
+    return { activity: "inactive", isRecurring, sortKey: 4 + secondsUntilNextNote / 1000 };
   }
 
   // Check "coming soon": is there a visible range starting within LOOKAHEAD_BEATS?
@@ -181,8 +276,9 @@ export function LineStrip() {
   const multiSelectedLineIndices = useEditorStore((s) => s.multiSelectedLineIndices);
   const addLine = useChartStore((s) => s.addLine);
   const groups = useGroupStore((s) => s.groups);
-  const openLineEventEditor = useTabStore((s) => s.openLineEventEditor);
+  const openUnrolledLineEditor = useTabStore((s) => s.openUnrolledLineEditor);
   const currentTime = useAudioStore((s) => s.currentTime);
+  const inactivityTimeoutSeconds = useSettingsStore((s) => s.lineInactivityTimeoutSeconds);
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -205,14 +301,17 @@ export function LineStrip() {
   const bpmList = useMemo(() => new BpmList(bpmPoints), [bpmPoints]);
   const currentBeat = useMemo(() => bpmList.beatAtFloat(currentTime - offset), [bpmList, currentTime, offset]);
 
-  // Classify all lines and compute sort order
+  // Classify all lines and compute sort order (considers both opacity and note proximity)
   const lineData = useMemo(() => {
     return lines.map((line, i) => {
-      const classification = classifyLine(line.events, line.event_layers, currentBeat);
+      const classification = classifyLine(
+        line.events, line.event_layers, currentBeat,
+        line.notes, bpmList, inactivityTimeoutSeconds,
+      );
       const category = line._category ?? autoCategorize(line);
       return { index: i, line, category, ...classification };
     });
-  }, [lines, currentBeat]);
+  }, [lines, currentBeat, bpmList, inactivityTimeoutSeconds]);
 
   // Sort: active first, then coming-soon, just-passed, long-passed, inactive
   const sortedLines = useMemo(() => {
@@ -240,6 +339,17 @@ export function LineStrip() {
     }
   }, [toggleLineStripSearch]);
 
+  // Horizontal wheel scroll — converts vertical scroll to horizontal on the chip bar.
+  // stopPropagation prevents the event from reaching the canvas scroll handler.
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (scrollRef.current) {
+      // Use deltaY (vertical scroll) as primary, fall back to deltaX for trackpads
+      scrollRef.current.scrollLeft += e.deltaY !== 0 ? e.deltaY : e.deltaX;
+    }
+  }, []);
+
   // Auto-scroll selected line into view
   useEffect(() => {
     if (selectedLineIndex === null || !scrollRef.current) return;
@@ -252,6 +362,7 @@ export function LineStrip() {
   return (
     <div
       ref={scrollRef}
+      onWheel={handleWheel}
       style={{
         height: 30,
         display: "flex",
@@ -342,7 +453,12 @@ export function LineStrip() {
             }}
             onDoubleClick={() => {
               selectLine(index);
-              openLineEventEditor(index, line.name || `Line ${index + 1}`);
+              // Compute current beat from audio position and open per-line unrolled editor
+              const as_ = useAudioStore.getState();
+              const cs = useChartStore.getState();
+              const bl = new BpmList(cs.chart.bpm_list);
+              const currentBeat = bl.beatAtFloat(Math.max(0, as_.currentTime - cs.chart.offset));
+              openUnrolledLineEditor(index, line.name || `Line ${index + 1}`, currentBeat);
             }}
             style={{
               padding: "3px 8px",

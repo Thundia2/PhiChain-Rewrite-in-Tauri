@@ -4,6 +4,10 @@
 // Renders easing curves, keyframe diamonds, grid, and playhead.
 // Supports: click to select, drag to move keyframes, zoom/pan,
 // double-click to create events.
+//
+// Recent change: Added multi-line overlay support. When timeline
+// overlay is enabled, ghost curves from overlayLines are drawn
+// behind the main line's curves for cross-line comparison.
 // ============================================================
 
 import { useRef, useEffect, useCallback } from "react";
@@ -12,8 +16,7 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat, floatToBeat } from "../../types/chart";
-import type { LineEvent, LineEventKind, EasingType } from "../../types/chart";
-import { renderCurveGraph } from "./CurveGraphRenderer";
+import { renderCurveGraph, type OverlayLine } from "./CurveGraphRenderer";
 import {
   type CurveViewport,
   computeAutoRange,
@@ -37,10 +40,11 @@ export function CurveGraph({ isPopout }: CurveGraphProps) {
   });
 
   const height = useEditorStore((s) => isPopout ? 400 : s.curveEditorHeight);
-  const visibleLanes = useEditorStore((s) => s.curveEditorVisibleLanes);
-  const normalized = useEditorStore((s) => s.curveEditorNormalized);
+  // Subscribe to trigger re-renders when these values change (used in render loop via getState)
+  useEditorStore((s) => s.curveEditorVisibleLanes);
+  useEditorStore((s) => s.curveEditorNormalized);
   const hoveredKeyframe = useEditorStore((s) => s.curveEditorHoveredKeyframe);
-  const selectedEventIndices = useEditorStore((s) => s.selectedEventIndices);
+  useEditorStore((s) => s.selectedEventIndices);
 
   // Animation loop
   useEffect(() => {
@@ -113,6 +117,26 @@ export function CurveGraph({ isPopout }: CurveGraphProps) {
         vp.beatEnd = vp.beatStart + beatWindow;
       }
 
+      // Build overlay lines from the timeline overlay system
+      // Reuses the existing timelineOverlayLines state from editorStore
+      const overlayData: OverlayLine[] = [];
+      if (es.timelineOverlayEnabled && es.timelineOverlayLines.length > 0) {
+        const OVERLAY_COLORS = ["#ff6b6b", "#51cf66", "#ffd43b", "#cc5de8", "#4dabf7", "#38d9a9", "#ffa94d", "#748ffc"];
+        for (let oi = 0; oi < es.timelineOverlayLines.length; oi++) {
+          const overlayIdx = es.timelineOverlayLines[oi];
+          // Don't overlay the currently selected line on itself
+          if (overlayIdx === lineIndex) continue;
+          const overlayLine = cs.chart.lines[overlayIdx];
+          if (overlayLine) {
+            overlayData.push({
+              events: overlayLine.events,
+              color: OVERLAY_COLORS[oi % OVERLAY_COLORS.length],
+              label: overlayLine.name,
+            });
+          }
+        }
+      }
+
       renderCurveGraph(ctx, {
         events,
         visibleLanes: es.curveEditorVisibleLanes,
@@ -123,6 +147,8 @@ export function CurveGraph({ isPopout }: CurveGraphProps) {
         selectedEventIndices: es.selectedEventIndices,
         hoveredKeyframe: es.curveEditorHoveredKeyframe,
         normalized: es.curveEditorNormalized,
+        overlayLines: overlayData.length > 0 ? overlayData : undefined,
+        overlayOpacity: es.timelineOverlayOpacity,
       });
 
       ctx.restore();
@@ -153,8 +179,6 @@ export function CurveGraph({ isPopout }: CurveGraphProps) {
       // Dragging a keyframe
       const vp = viewportRef.current;
       const h = isPopout ? 400 : es.curveEditorHeight;
-      const w = canvas.getBoundingClientRect().width;
-      const newBeat = xToBeat(mouseX, vp, w);
       const newValue = yToValue(mouseY, vp, h);
 
       const event = line.events[dragState.eventIndex];

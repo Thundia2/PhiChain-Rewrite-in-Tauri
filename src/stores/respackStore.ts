@@ -85,10 +85,14 @@ export interface RespackState {
   selectedId: string | null;
   isLoading: boolean;
 
+  /** Get the currently selected respack, or null if none selected. */
   getActiveRespack: () => LoadedRespack | null;
+  /** Import a .zip resource pack. Extracts textures, stores in IndexedDB. Returns the pack ID. */
   importRespack: (zipData: ArrayBuffer) => Promise<string>;
+  /** Delete a resource pack from IndexedDB and memory. */
   deleteRespack: (id: string) => Promise<void>;
   selectRespack: (id: string | null) => void;
+  /** Load all resource packs from IndexedDB on startup. */
   initFromDb: () => Promise<void>;
 }
 

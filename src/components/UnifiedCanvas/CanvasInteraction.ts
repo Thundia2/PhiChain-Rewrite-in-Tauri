@@ -11,6 +11,9 @@
 //   IDLE → PLACING_NOTE      (mousedown with place tool)
 //   IDLE → DRAG_SELECTING    (mousedown on empty space + select tool)
 //   IDLE → PANNING           (middle mouse or space+drag)
+//   IDLE → ERASER_DRAG       (mousedown with eraser tool — Feature B)
+//
+// Recent change: Added EraserDragState for drag-to-erase (Feature B)
 //
 // commitValue() — ported from EventCanvas.tsx — creates/updates
 // events when a drag operation completes.
@@ -109,6 +112,14 @@ export interface HoldResizeDragState {
   above: boolean;
 }
 
+/** Eraser drag state — accumulates hit notes during a sweeping drag-erase. */
+export interface EraserDragState {
+  type: "eraser_drag";
+  lineIndex: number;
+  /** Indices of notes hit during the drag (deduplicated) */
+  hitNoteIndices: Set<number>;
+}
+
 export type DragState =
   | TranslateDragState
   | RotateDragState
@@ -117,6 +128,7 @@ export type DragState =
   | NoteDragState
   | HoldPlacementDragState
   | HoldResizeDragState
+  | EraserDragState
   | null;
 
 // ============================================================

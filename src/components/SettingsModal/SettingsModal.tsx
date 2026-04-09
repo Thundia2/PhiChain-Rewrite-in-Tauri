@@ -1,3 +1,16 @@
+// ============================================================
+// Settings Modal — Tabbed settings for editor configuration
+//
+// Recent change: Added LatencyCalibration component to the Audio
+// tab for per-device audio latency compensation.
+//
+// Provides categorized settings (General, Audio, Game Preview,
+// Timeline, Editor, Resource Pack, Notifications) rendered in
+// a modal overlay. Each category tab renders toggle switches,
+// sliders, and inputs that read/write to settingsStore. Also
+// manages resource pack import/deletion via respackStore.
+// ============================================================
+
 import { useState } from "react";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useBookmarkStore } from "../../stores/bookmarkStore";
@@ -5,6 +18,7 @@ import { useRespackStore } from "../../stores/respackStore";
 import { useToastStore } from "../../stores/toastStore";
 import { ToggleSwitch } from "../Settings/ToggleSwitch";
 import { Card, SectionHeader as SH, ActionButton } from "../common/UIKit";
+import { LatencyCalibration } from "./LatencyCalibration";
 
 type Category = "general" | "audio" | "game-preview" | "timeline" | "editor" | "resource-pack" | "notifications";
 
@@ -192,32 +206,42 @@ function AudioContent() {
   const settings = useSettingsStore();
   const update = settings.updateSettings;
   return (
-    <div>
-      <SectionHeader>Playback</SectionHeader>
-      <Card>
-        <CardRow label="Music volume">
-          <Slider
-            value={settings.musicVolume}
-            min={0} max={1} step={0.05}
-            onChange={(v) => update({ musicVolume: v })}
-            format={(v) => `${Math.round(v * 100)}%`}
-          />
-        </CardRow>
-        <CardRow label="Hit sound volume">
-          <Slider
-            value={settings.hitSoundVolume}
-            min={0} max={1} step={0.05}
-            onChange={(v) => update({ hitSoundVolume: v })}
-            format={(v) => `${Math.round(v * 100)}%`}
-          />
-        </CardRow>
-        <CardRow label="Enable hit sounds" description="Play sounds when notes are hit" last>
-          <ToggleSwitch
-            checked={settings.hitSoundEnabled}
-            onChange={(v) => update({ hitSoundEnabled: v })}
-          />
-        </CardRow>
-      </Card>
+    <div className="flex flex-col gap-5">
+      <div>
+        <SectionHeader>Playback</SectionHeader>
+        <Card>
+          <CardRow label="Music volume">
+            <Slider
+              value={settings.musicVolume}
+              min={0} max={1} step={0.05}
+              onChange={(v) => update({ musicVolume: v })}
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
+          </CardRow>
+          <CardRow label="Hit sound volume">
+            <Slider
+              value={settings.hitSoundVolume}
+              min={0} max={1} step={0.05}
+              onChange={(v) => update({ hitSoundVolume: v })}
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
+          </CardRow>
+          <CardRow label="Enable hit sounds" description="Play sounds when notes are hit" last>
+            <ToggleSwitch
+              checked={settings.hitSoundEnabled}
+              onChange={(v) => update({ hitSoundEnabled: v })}
+            />
+          </CardRow>
+        </Card>
+      </div>
+
+      {/* Latency Calibration: manual slider + tap-to-calibrate flow */}
+      <div>
+        <SectionHeader>Latency Calibration</SectionHeader>
+        <Card>
+          <LatencyCalibration />
+        </Card>
+      </div>
     </div>
   );
 }
@@ -375,6 +399,21 @@ function EditorContent() {
         </Card>
       </div>
       <div>
+        <SectionHeader>Line Strip</SectionHeader>
+        <Card>
+          <CardRow label="Note inactivity timeout" description="Demote lines to inactive when no note arrives within this window (0 = disabled)" last>
+            <Slider
+              value={settings.lineInactivityTimeoutSeconds}
+              min={0}
+              max={30}
+              step={1}
+              onChange={(v) => update({ lineInactivityTimeoutSeconds: v })}
+              format={(v) => v === 0 ? "Off" : `${v}s`}
+            />
+          </CardRow>
+        </Card>
+      </div>
+      <div>
         <SectionHeader>Autosave</SectionHeader>
         <Card>
           <CardRow label="Enable autosave">
@@ -488,10 +527,11 @@ function ResourcePackContent() {
   );
 }
 
-const TOAST_TYPE_COLORS: Record<"error" | "info" | "success", string> = {
+const TOAST_TYPE_COLORS: Record<"error" | "info" | "success" | "warning", string> = {
   error: "#ff4a6a",
   info: "#6c8aff",
   success: "#4aff7a",
+  warning: "#ffb74d",
 };
 
 function formatTimestamp(ts: number): string {

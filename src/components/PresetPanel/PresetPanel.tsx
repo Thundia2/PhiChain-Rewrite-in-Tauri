@@ -7,7 +7,6 @@ import { BUILTIN_PRESETS } from "../../presets/builtinPresets";
 import { applyPresetAtPlayhead } from "../../utils/applyPreset";
 import { useEditorStore } from "../../stores/editorStore";
 import { PresetCurvePreview } from "./PresetCurvePreview";
-import { ActionButton, SectionHeader } from "../common/UIKit";
 import type { EventPreset } from "../../types/preset";
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -48,7 +47,8 @@ export function PresetPanel() {
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const p of BUILTIN_PRESETS) {
-      counts[p.category] = (counts[p.category] || 0) + 1;
+      const cat = p.category ?? "compound";
+      counts[cat] = (counts[cat] || 0) + 1;
     }
     return counts;
   }, []);
@@ -147,8 +147,8 @@ export function PresetPanel() {
                     fontSize: 8,
                     padding: "0 3px",
                     borderRadius: 3,
-                    backgroundColor: CATEGORY_COLORS[preset.category] + "20",
-                    color: CATEGORY_COLORS[preset.category],
+                    backgroundColor: CATEGORY_COLORS[preset.category ?? "compound"] + "20",
+                    color: CATEGORY_COLORS[preset.category ?? "compound"],
                     textTransform: "uppercase",
                     fontWeight: 700,
                   }}
