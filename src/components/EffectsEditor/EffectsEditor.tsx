@@ -6,6 +6,10 @@
 //   - Editing effect start/end beats and uniform variables
 //   - Adding/removing video backgrounds
 //   - Importing/exporting extra.json
+//
+// Recent change: Added stable _id fields to effects/videos for React
+// keys. Previously using array index as key caused state persistence
+// bugs when items were deleted from the middle of the list.
 // ============================================================
 
 import { useState } from "react";
@@ -14,7 +18,7 @@ import type { ShaderEffect, VideoBackground, ExtraConfig } from "../../types/ext
 import type { Beat } from "../../types/chart";
 import { beatToFloat, floatToBeat } from "../../types/chart";
 import { SHADER_DEFAULTS } from "../../canvas/shaders";
-import { Card, CardRow, ActionButton, Pill, Toggle, INPUT_STYLE, SELECT_STYLE } from "../common/UIKit";
+import { Card, ActionButton, Pill, Toggle, INPUT_STYLE, SELECT_STYLE } from "../common/UIKit";
 import { safeParseNumber } from "../common/FormFields";
 
 const BUILTIN_SHADERS = [
@@ -37,6 +41,7 @@ export function EffectsEditor() {
   // ---- Effect management ----
   const addEffect = () => {
     const newEffect: ShaderEffect = {
+      _id: crypto.randomUUID(),
       start: [0, 0, 1],
       end: [4, 0, 1],
       shader: "chromatic",
@@ -58,6 +63,7 @@ export function EffectsEditor() {
   // ---- Video management ----
   const addVideo = () => {
     const newVideo: VideoBackground = {
+      _id: crypto.randomUUID(),
       path: "bga.mp4",
       time: [0, 0, 1],
       scale: "cropCenter",
@@ -106,7 +112,7 @@ export function EffectsEditor() {
 
           {effects.map((effect, i) => (
             <EffectCard
-              key={i}
+              key={effect._id ?? i}
               effect={effect}
               index={i}
               onUpdate={(changes) => updateEffect(i, changes)}
@@ -134,7 +140,7 @@ export function EffectsEditor() {
 
           {videos.map((video, i) => (
             <VideoCard
-              key={i}
+              key={video._id ?? i}
               video={video}
               index={i}
               onUpdate={(changes) => updateVideo(i, changes)}

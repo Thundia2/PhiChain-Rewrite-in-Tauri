@@ -1,3 +1,13 @@
+// ============================================================
+// Menu System — Global menu definitions and action bindings
+//
+// Generates the top-level menu structure (File, Edit, View,
+// Panels, Help) used by MenuBar and CommandPalette. Each menu
+// item has a label, optional shortcut hint, and an action
+// closure that calls the appropriate store methods. The hook
+// accepts callback props for dialogs and panel toggles.
+// ============================================================
+
 import type JSZip from "jszip";
 import { useChartStore } from "../stores/chartStore";
 import { useTabStore } from "../stores/tabStore";
@@ -13,6 +23,29 @@ import { useRecentProjectsStore } from "../stores/recentProjectsStore";
 import { useToastStore } from "../stores/toastStore";
 import { saveStoredProject } from "../utils/projectStorage";
 import { showConfirm } from "../components/common/ConfirmDialog";
+import { beatToFloat, floatToBeat } from "../types/chart";
+import { BpmList } from "../utils/bpmList";
+import { evaluateEasing } from "../canvas/easings";
+
+/**
+ * Search a ZIP archive for an entry whose basename (filename without path)
+ * matches the target name, case-insensitively. Returns the first match or null.
+ * Used to locate the exact audio/illustration file specified by RPE META fields
+ * even when the ZIP contains multiple files with the same extension.
+ */
+function findZipEntryByBasename(
+  zip: JSZip,
+  targetName: string,
+): JSZip.JSZipObject | null {
+  const target = targetName.toLowerCase();
+  let found: JSZip.JSZipObject | null = null;
+  zip.forEach((relativePath, entry) => {
+    if (found || entry.dir) return;
+    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
+    if (baseName === target) found = entry;
+  });
+  return found;
+}
 
 /** Helper to pick a file via a temporary input element. Returns null if cancelled. */
 export function pickFile(accept: string): Promise<File | null> {
@@ -53,17 +86,23 @@ export function useMenus(
   onShowBatchLine?: () => void,
   onShowLyricsSync?: () => void,
   onShowOnDemandPanel?: (id: PanelId) => void,
+  onShowPasteSpecial?: () => void,
+  onShowGoToBeat?: () => void,
+  onShowExportDiff?: () => void,
+  onShowSelectiveExport?: () => void,
+  onShowSpinGenerator?: () => void,
+  onShowShakeGenerator?: () => void,
+  onShowNotePattern?: () => void,
 ): Menu[] {
   const projectPath = useChartStore((s) => s.projectPath);
   const getChartJson = useChartStore((s) => s.getChartJson);
   const markClean = useChartStore((s) => s.markClean);
   const closeProject = useChartStore((s) => s.closeProject);
-  const undo = useChartStore((s) => s.undo);
-  const redo = useChartStore((s) => s.redo);
   const canUndo = useChartStore((s) => s.canUndo);
   const canRedo = useChartStore((s) => s.canRedo);
   const isLoaded = useChartStore((s) => s.isLoaded);
   const openUnifiedEditor = useTabStore((s) => s.openUnifiedEditor);
+  const openUnrolledEditor = useTabStore((s) => s.openUnrolledEditor);
 
   return [
     {
@@ -106,11 +145,12 @@ export function useMenus(
                 let bookmarksJson: string | null = null;
                 let fontEntry: JSZip.JSZipObject | null = null;
                 let infoYmlEntry: JSZip.JSZipObject | null = null;
+                let zip: JSZip | null = null;
 
                 if (file.name.toLowerCase().endsWith(".zip") || file.name.toLowerCase().endsWith(".pez")) {
                   const { default: JSZipLib } = await import("jszip");
                   const zipData = await file.arrayBuffer();
-                  const zip = await JSZipLib.loadAsync(zipData);
+                  zip = await JSZipLib.loadAsync(zipData);
 
                   let chartEntry: JSZip.JSZipObject | null = null;
                   let audioEntry: JSZip.JSZipObject | null = null;
@@ -176,6 +216,23 @@ export function useMenus(
                 const chart = convertRpeToPhichain(chartText);
                 const meta = extractRpeMeta(chartText);
 
+                // Override audio/illustration with the exact files specified by RPE META.
+                // The initial ZIP scan picks the first audio/image file it encounters,
+                // which may be a sound effect (e.g. drag hit sound) instead of the song.
+                if (zip && meta.rpe_song) {
+                  const metaAudio = findZipEntryByBasename(zip, meta.rpe_song);
+                  if (metaAudio) {
+                    musicBlob = await metaAudio.async("blob");
+                    musicExt = meta.rpe_song.split(".").pop()?.toLowerCase() ?? "mp3";
+                  }
+                }
+                if (zip && meta.rpe_background) {
+                  const metaImage = findZipEntryByBasename(zip, meta.rpe_background);
+                  if (metaImage) {
+                    illustrationBlob = await metaImage.async("blob");
+                  }
+                }
+
                 // Parse info.yml if present (Phira extended metadata)
                 if (infoYmlEntry) {
                   try {
@@ -200,6 +257,9 @@ export function useMenus(
                   const musicUrl = URL.createObjectURL(musicBlob);
                   await audioEngine.load(musicUrl, musicExt);
                   useAudioStore.getState().setMusicLoaded(true);
+                  // Track the blob URL + format so tab session restore can reuse it
+                  const { setAudioBlobUrl } = await import("../utils/chartSessions");
+                  setAudioBlobUrl(musicUrl, musicExt);
                 }
 
                 if (illustrationBlob) {
@@ -274,6 +334,8 @@ export function useMenus(
                   meta,
                   audioBlob: musicBlob ? await musicBlob.arrayBuffer() : null,
                   audioExt: musicExt ?? null,
+                  // Save illustration blob so it persists across app restarts
+                  illustrationBlob: illustrationBlob ? await illustrationBlob.arrayBuffer() : null,
                   savedAt: Date.now(),
                 });
                 useRecentProjectsStore.getState().addRecent({
@@ -329,6 +391,7 @@ export function useMenus(
                   meta: pecMeta,
                   audioBlob: null,
                   audioExt: null,
+                  illustrationBlob: null, // PEC format has no bundled illustration
                   savedAt: Date.now(),
                 });
                 useRecentProjectsStore.getState().addRecent({
@@ -384,6 +447,7 @@ export function useMenus(
                   meta: officialMeta,
                   audioBlob: null,
                   audioExt: null,
+                  illustrationBlob: null, // Official format has no bundled illustration
                   savedAt: Date.now(),
                 });
                 useRecentProjectsStore.getState().addRecent({
@@ -442,14 +506,37 @@ export function useMenus(
           },
         },
         { separator: true, label: "" },
-        { label: "Quit", action: () => console.log("TODO: quit") },
+        {
+          label: "Quit",
+          action: async () => {
+            const cs = useChartStore.getState();
+            if (cs.isDirty) {
+              const confirmed = await showConfirm("You have unsaved changes. Quit anyway?");
+              if (!confirmed) return;
+            }
+            window.close();
+          },
+        },
       ],
     },
     {
       label: "Edit",
       items: [
-        { label: "Undo", shortcut: "Ctrl+Z", disabled: !canUndo(), action: undo },
-        { label: "Redo", shortcut: "Ctrl+Shift+Z", disabled: !canRedo(), action: redo },
+        { label: "Undo", shortcut: "Ctrl+Z", disabled: !canUndo() && !useBookmarkStore.getState().canUndo(), action: () => {
+          // Interleaved undo: compare sequence numbers to decide which store to undo
+          const cs = useChartStore.getState();
+          const bs = useBookmarkStore.getState();
+          const chartTopSeq = cs._pastSeqs.length > 0 ? cs._pastSeqs[cs._pastSeqs.length - 1] : 0;
+          const bmTopSeq = bs._pastSeqs.length > 0 ? bs._pastSeqs[bs._pastSeqs.length - 1] : 0;
+          if (bmTopSeq > chartTopSeq && bs.canUndo()) { bs.undo(); } else { cs.undo(); }
+        }},
+        { label: "Redo", shortcut: "Ctrl+Shift+Z", disabled: !canRedo() && !useBookmarkStore.getState().canRedo(), action: () => {
+          const cs = useChartStore.getState();
+          const bs = useBookmarkStore.getState();
+          const chartRedoSeq = cs._futureSeqs.length > 0 ? cs._futureSeqs[cs._futureSeqs.length - 1] : 0;
+          const bmRedoSeq = bs._futureSeqs.length > 0 ? bs._futureSeqs[bs._futureSeqs.length - 1] : 0;
+          if (bmRedoSeq > chartRedoSeq && bs.canRedo()) { bs.redo(); } else { cs.redo(); }
+        }},
         { separator: true, label: "" },
         {
           label: "Create Group from Selection",
@@ -480,6 +567,16 @@ export function useMenus(
           action: () => onShowParametric?.(),
         },
         {
+          label: "Spin / Rotation...",
+          disabled: !isLoaded,
+          action: () => onShowSpinGenerator?.(),
+        },
+        {
+          label: "Shake / Oscillation...",
+          disabled: !isLoaded,
+          action: () => onShowShakeGenerator?.(),
+        },
+        {
           label: "Improvisation Mode",
           shortcut: "Shift+I",
           disabled: !isLoaded,
@@ -498,6 +595,91 @@ export function useMenus(
           disabled: !isLoaded,
           action: () => onShowLyricsSync?.(),
         },
+        {
+          label: "Note Pattern...",
+          disabled: !isLoaded,
+          action: () => onShowNotePattern?.(),
+        },
+        { separator: true, label: "" },
+        {
+          label: "Paste Special...",
+          shortcut: "Ctrl+Alt+V",
+          disabled: !isLoaded,
+          action: () => onShowPasteSpecial?.(),
+        },
+        {
+          label: "Go to Beat...",
+          shortcut: "Ctrl+J",
+          disabled: !isLoaded,
+          action: () => onShowGoToBeat?.(),
+        },
+        { separator: true, label: "" },
+        {
+          label: "Split Event at Playhead",
+          disabled: !isLoaded,
+          action: () => {
+            // Split all selected events at the current playhead beat
+            const es = useEditorStore.getState();
+            const cs = useChartStore.getState();
+            const as_ = useAudioStore.getState();
+            if (es.selectedLineIndex === null || es.selectedEventIndices.length === 0) return;
+            const line = cs.chart.lines[es.selectedLineIndex];
+            if (!line) return;
+
+            const bpmList = new BpmList(cs.chart.bpm_list);
+            const splitBeat = bpmList.beatAtFloat(Math.max(0, as_.currentTime - cs.chart.offset));
+
+            // Process in reverse order to preserve indices during replaceEvent calls
+            const sorted = [...es.selectedEventIndices].sort((a, b) => b - a);
+            for (const idx of sorted) {
+              const event = line.events[idx];
+              if (!event) continue;
+              const startB = beatToFloat(event.start_beat);
+              const endB = beatToFloat(event.end_beat);
+              if (splitBeat <= startB || splitBeat >= endB) continue;
+
+              const t = (splitBeat - startB) / (endB - startB);
+
+              if ("transition" in event.value) {
+                const { start, end, easing } = event.value.transition;
+                const mid = start + (end - start) * evaluateEasing(easing, t);
+                cs.replaceEvent(es.selectedLineIndex!, idx, [
+                  { ...structuredClone(event), end_beat: floatToBeat(splitBeat), value: { transition: { start, end: mid, easing } } },
+                  { ...structuredClone(event), start_beat: floatToBeat(splitBeat), value: { transition: { start: mid, end, easing } } },
+                ]);
+              } else if ("constant" in event.value) {
+                cs.replaceEvent(es.selectedLineIndex!, idx, [
+                  { ...structuredClone(event), end_beat: floatToBeat(splitBeat) },
+                  { ...structuredClone(event), start_beat: floatToBeat(splitBeat) },
+                ]);
+              }
+            }
+          },
+        },
+        {
+          label: "Duplicate Event After",
+          disabled: !isLoaded,
+          action: () => {
+            // Clone selected events and place immediately after their end beat
+            const es = useEditorStore.getState();
+            const cs = useChartStore.getState();
+            if (es.selectedLineIndex === null || es.selectedEventIndices.length === 0) return;
+            const line = cs.chart.lines[es.selectedLineIndex];
+            if (!line) return;
+
+            const newEvents = es.selectedEventIndices.map((idx) => {
+              const event = line.events[idx];
+              const duration = beatToFloat(event.end_beat) - beatToFloat(event.start_beat);
+              return {
+                ...structuredClone(event),
+                start_beat: event.end_beat,
+                end_beat: floatToBeat(beatToFloat(event.end_beat) + duration),
+              };
+            });
+
+            cs.batchMultiLineMutations([{ lineIndex: es.selectedLineIndex, newEvents }]);
+          },
+        },
       ],
     },
     {
@@ -507,6 +689,12 @@ export function useMenus(
           label: "Unified Editor",
           disabled: !isLoaded,
           action: () => openUnifiedEditor(),
+        },
+        {
+          label: "Unrolled Editor",
+          shortcut: "Ctrl+Shift+U",
+          disabled: !isLoaded,
+          action: () => openUnrolledEditor(),
         },
         {
           label: "Classic Editor",
@@ -666,6 +854,17 @@ export function useMenus(
               useToastStore.getState().addToast({ message: "Failed to export PEZ bundle. Check the console for details.", type: "error" });
             }
           },
+        },
+        { separator: true, label: "" },
+        {
+          label: "Export Diff...",
+          disabled: !isLoaded,
+          action: () => onShowExportDiff?.(),
+        },
+        {
+          label: "Selective Export...",
+          disabled: !isLoaded,
+          action: () => onShowSelectiveExport?.(),
         },
       ],
     },

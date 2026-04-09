@@ -285,7 +285,7 @@ export class PostProcessPipeline {
    * Get an existing compiled program or compile a new one.
    */
   private getOrCompileProgram(key: string, fragmentSource: string): CompiledProgram | null {
-    let existing = this.programs.get(key);
+    const existing = this.programs.get(key);
     if (existing) return existing;
 
     const compiled = this.compileProgram(key, fragmentSource);

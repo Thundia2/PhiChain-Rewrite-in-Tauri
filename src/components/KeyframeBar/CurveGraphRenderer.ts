@@ -3,6 +3,10 @@
 //
 // Draws grid, value axis labels, easing curve polylines,
 // keyframe diamonds, and the playhead indicator.
+//
+// Recent change: Added multi-line overlay support via optional
+// overlayLines parameter. Ghost curves from other lines are
+// drawn behind the main curves with configurable opacity.
 // ============================================================
 
 import type { LineEvent, LineEventKind, EasingType } from "../../types/chart";
@@ -72,6 +76,13 @@ function evaluateEasing(t: number, easing: EasingType): number {
   }
 }
 
+/** Ghost overlay line — drawn as faded curves behind the main line */
+export interface OverlayLine {
+  events: LineEvent[];
+  color: string; // Distinct color for this overlay line
+  label?: string; // Optional label (e.g., line name)
+}
+
 export interface CurveRenderOptions {
   events: LineEvent[];
   visibleLanes: LineEventKind[];
@@ -82,6 +93,10 @@ export interface CurveRenderOptions {
   selectedEventIndices: number[];
   hoveredKeyframe: { eventIndex: number; kind: LineEventKind; handle: "start" | "end" } | null;
   normalized: boolean;
+  /** Optional: ghost overlay curves from other lines */
+  overlayLines?: OverlayLine[];
+  /** Opacity for overlay curves (0-1, default 0.3) */
+  overlayOpacity?: number;
 }
 
 /**
@@ -91,7 +106,7 @@ export function renderCurveGraph(
   ctx: CanvasRenderingContext2D,
   opts: CurveRenderOptions,
 ): void {
-  const { events, visibleLanes, viewport, canvasWidth, canvasHeight, currentBeat, selectedEventIndices, hoveredKeyframe, normalized } = opts;
+  const { events, visibleLanes, viewport, canvasWidth, canvasHeight, currentBeat, selectedEventIndices, hoveredKeyframe, normalized, overlayLines, overlayOpacity } = opts;
 
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
@@ -104,6 +119,25 @@ export function renderCurveGraph(
 
   // ---- Value axis labels ----
   drawValueLabels(ctx, viewport, canvasHeight);
+
+  // ---- Overlay lines (ghost curves from other lines, drawn behind the main curves) ----
+  if (overlayLines && overlayLines.length > 0) {
+    const alpha = overlayOpacity ?? 0.3;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    for (const overlay of overlayLines) {
+      for (const lane of visibleLanes) {
+        const laneEvents = overlay.events.filter((e) => e.kind === lane);
+        if (laneEvents.length === 0) continue;
+
+        // Draw curves with the overlay's color (desaturated via alpha)
+        for (const event of laneEvents) {
+          drawEventCurve(ctx, event, viewport, canvasWidth, canvasHeight, overlay.color);
+        }
+      }
+    }
+    ctx.restore();
+  }
 
   // ---- Easing curves per lane ----
   for (const lane of visibleLanes) {

@@ -6,7 +6,7 @@
 // ============================================================
 
 import { useState, useCallback } from "react";
-import { Field, SelectField, safeParseNumber } from "../common/FormFields";
+import { Field, safeParseNumber } from "../common/FormFields";
 import { EasingPicker } from "../common/EasingPicker";
 import { generateSpinEvent } from "../../utils/spinGenerator";
 import { useChartStore } from "../../stores/chartStore";
@@ -104,7 +104,7 @@ export function SpinGeneratorDialog({ open, onClose }: { open: boolean; onClose:
 
           <Field label="End angle" value={Math.round(endAngle * 100) / 100} onChange={() => {}} disabled />
 
-          <EasingPicker value={config.easing} onChange={(v) => update({ easing: v as EasingType })} />
+          <EasingPicker value={typeof config.easing === "string" ? config.easing : "linear"} onChange={(v) => update({ easing: v as EasingType })} />
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>

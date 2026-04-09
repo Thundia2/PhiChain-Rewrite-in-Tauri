@@ -11,6 +11,9 @@
 //   restoreSession(tabId) — restore a saved session to the stores
 //   deleteSession(tabId)  — remove a session (when tab is closed)
 //   hasSession(tabId)     — check if a session exists
+//
+// Recent change: Added _pastSeqs/_futureSeqs to session
+// save/restore so undo sequence interleaving survives tab switches.
 // ============================================================
 
 import { useChartStore } from "../stores/chartStore";
@@ -37,6 +40,8 @@ export interface ChartSession {
   isDirty: boolean;
   _past: PhichainChart[];
   _future: PhichainChart[];
+  _pastSeqs: number[];
+  _futureSeqs: number[];
 
   // Editor store (subset — UI-relevant state)
   selectedLineIndex: number | null;
@@ -46,17 +51,41 @@ export interface ChartSession {
   timelineZoom: number;
   density: number;
   lanes: number;
+  xSnapEnabled: boolean;
   noteSideFilter: NoteSideFilter;
   lineSortMode: LineSortMode;
+  unrolledScrollBeat: number;
 
   // Audio info (to reload when switching back)
   musicUrl: string | null; // Blob URL or filesystem path used to reload audio
+  audioFormat: string | null; // Audio codec hint (e.g. "mp3", "ogg") — needed for blob URLs which lack extensions
   audioCurrentTime: number;
   musicLoaded: boolean;
 
   // Editor-only data (groups + bookmarks)
   groups: EditorGroup[];
   bookmarks: Bookmark[];
+}
+
+// ---- Audio blob URL tracking ----
+// Browser-loaded projects use blob: URLs for audio that don't survive a page
+// reload. We track the last-loaded blob URL here so saveSession() can store it
+// (instead of the empty `musicPath` which is useless for in-memory projects).
+
+let _lastAudioBlobUrl: string | null = null;
+let _lastAudioFormat: string | null = null;
+
+/** Call after every audioEngine.load() with a blob URL so sessions can replay it.
+ *  Pass the audio format (e.g. "mp3", "ogg") so restoreSession() can tell Howler
+ *  which codec to use — blob URLs have no file extension for Howler to detect from. */
+export function setAudioBlobUrl(url: string | null, format?: string | null): void {
+  _lastAudioBlobUrl = url;
+  if (format !== undefined) _lastAudioFormat = format;
+}
+
+/** Get the current tracked audio blob URL (used internally by saveSession). */
+export function getAudioBlobUrl(): string | null {
+  return _lastAudioBlobUrl;
 }
 
 // ---- Session storage ----
@@ -88,6 +117,8 @@ export function saveSession(tabId: string): void {
     isDirty: cs.isDirty,
     _past: cs._past.map((c) => structuredClone(c)),
     _future: cs._future.map((c) => structuredClone(c)),
+    _pastSeqs: [...cs._pastSeqs],
+    _futureSeqs: [...cs._futureSeqs],
 
     // Editor store
     selectedLineIndex: es.selectedLineIndex,
@@ -97,11 +128,15 @@ export function saveSession(tabId: string): void {
     timelineZoom: es.timelineZoom,
     density: es.density,
     lanes: es.lanes,
+    xSnapEnabled: es.xSnapEnabled,
     noteSideFilter: es.noteSideFilter,
     lineSortMode: es.lineSortMode,
+    unrolledScrollBeat: es.unrolledScrollBeat,
 
-    // Audio info
-    musicUrl: cs.musicPath, // We use musicPath as the reload key
+    // Audio info — prefer the tracked blob URL (set by import/load flows)
+    // over cs.musicPath which is "" for browser-loaded projects
+    musicUrl: _lastAudioBlobUrl || cs.musicPath,
+    audioFormat: _lastAudioFormat || (cs.musicPath ? cs.musicPath.split(".").pop()?.toLowerCase() ?? null : null),
     audioCurrentTime: as_.currentTime,
     musicLoaded: as_.musicLoaded,
 
@@ -134,6 +169,8 @@ export async function restoreSession(tabId: string): Promise<boolean> {
     isLoaded: true,
     _past: session._past,
     _future: session._future,
+    _pastSeqs: session._pastSeqs ?? [],
+    _futureSeqs: session._futureSeqs ?? [],
   });
 
   // Restore editor store
@@ -145,8 +182,10 @@ export async function restoreSession(tabId: string): Promise<boolean> {
     timelineZoom: session.timelineZoom,
     density: session.density,
     lanes: session.lanes,
+    xSnapEnabled: session.xSnapEnabled,
     noteSideFilter: session.noteSideFilter,
     lineSortMode: session.lineSortMode,
+    unrolledScrollBeat: session.unrolledScrollBeat ?? 0,
     // Clear transient state
     dragSelectionRect: null,
     holdResizeState: null,
@@ -169,7 +208,11 @@ export async function restoreSession(tabId: string): Promise<boolean> {
   if (session.musicLoaded && session.musicUrl) {
     try {
       let url = session.musicUrl;
-      const ext = session.musicUrl.split(".").pop()?.toLowerCase() ?? "mp3";
+      // Use the saved audio format when available; fall back to extracting from
+      // the URL (works for filesystem paths like "song.mp3" but NOT for blob URLs
+      // which have no extension — those default to "mp3").
+      const ext = session.audioFormat
+        || (session.musicUrl.startsWith("blob:") ? "mp3" : session.musicUrl.split(".").pop()?.toLowerCase() ?? "mp3");
       // If the URL is a filesystem path (not a blob: URL), read via Tauri's fs plugin
       if (!url.startsWith("blob:") && !url.startsWith("http")) {
         const { readAudioFileAsUrl } = await import("./ipc");
@@ -178,6 +221,9 @@ export async function restoreSession(tabId: string): Promise<boolean> {
       await audioEngine.load(url, ext);
       useAudioStore.getState().setMusicLoaded(true);
       audioEngine.seek(session.audioCurrentTime);
+      // Re-track the blob URL + format so the next saveSession() has correct data
+      _lastAudioBlobUrl = url.startsWith("blob:") ? url : null;
+      _lastAudioFormat = ext;
     } catch (err) {
       console.warn("[chartSessions] Failed to reload audio:", err);
     }

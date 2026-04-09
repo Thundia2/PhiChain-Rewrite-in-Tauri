@@ -127,7 +127,7 @@ function EvaluatorTab() {
         if (beatVal >= start && beatVal <= end) {
           if ("constant" in ev.value) {
             values[kind] = ev.value.constant;
-          } else {
+          } else if ("transition" in ev.value) {
             const t = end > start ? (beatVal - start) / (end - start) : 0;
             const { start: s, end: e, easing } = ev.value.transition;
             const easedT = evaluateEasing(easing, t);

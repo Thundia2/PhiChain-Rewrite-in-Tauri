@@ -8,6 +8,8 @@
 //   "ctrl+z" — modifier + key
 //   "v"      — plain key
 //   "delete, backspace" — multiple keys for same action
+//
+// Recent change: Added Shift+O for toggle onset detection.
 // ============================================================
 
 export interface HotkeyDefinition {
@@ -79,15 +81,18 @@ export const DEFAULT_HOTKEYS: Record<string, HotkeyDefinition> = {
 
   // ---- Playback ----
   toggle_playback: { key: "space", label: "Play / Pause", category: "Playback" },
-  loop_start: { key: "i", label: "Set Loop Start", category: "Playback" },
-  loop_end: { key: "o", label: "Set Loop End", category: "Playback" },
-  toggle_loop: { key: "l", label: "Toggle Loop", category: "Playback" },
+  loop_start: { key: "[", label: "Set Loop Start", category: "Playback" },
+  loop_end: { key: "]", label: "Set Loop End", category: "Playback" },
+  toggle_loop: { key: "\\", label: "Toggle Loop", category: "Playback" },
 
   // ---- View ----
-  toggle_grid: { key: "g", label: "Toggle Grid", category: "View" },
+  open_unrolled: { key: "ctrl+shift+u, meta+shift+u", label: "Open Unrolled Editor", category: "View" },
+  enter_group_edit: { key: "g", label: "Enter Group Edit / Toggle Mini Preview", category: "View" },
+  toggle_onset_detection: { key: "shift+o", label: "Toggle Onset Detection", category: "View" },
   toggle_devtools: { key: "f12", label: "Toggle DevTools", category: "View" },
   add_section_marker: { key: "ctrl+b, meta+b", label: "Add Section Marker", category: "View" },
-  paste_special: { key: "ctrl+shift+v, meta+shift+v", label: "Paste Special...", category: "View" },
+  paste_special: { key: "ctrl+alt+v, meta+alt+v", label: "Paste Special...", category: "Edit" },
+  cross_line_paste: { key: "ctrl+shift+v, meta+shift+v", label: "Paste to Selected Lines", category: "Edit" },
 };
 
 /**

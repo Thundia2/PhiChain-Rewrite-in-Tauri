@@ -2,7 +2,7 @@
 // Quick Event Creation — Context menu helpers
 // ============================================================
 
-import type { LineEventKind, LineEvent, EasingType } from "../types/chart";
+import type { LineEventKind, EasingType } from "../types/chart";
 import { beatToFloat, floatToBeat } from "../types/chart";
 import { useChartStore } from "../stores/chartStore";
 import { useSettingsStore } from "../stores/settingsStore";

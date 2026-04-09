@@ -4,6 +4,10 @@
 // Draws the live chart preview using Canvas2D.
 // Ported from phichain-game/src/core.rs and related Bevy systems.
 //
+// Recent change: Wrapped renderLine body in try-finally to guarantee
+// ctx.restore() even on exception. Previously a rendering error would
+// permanently corrupt the canvas transform stack.
+//
 // Features:
 //   - Accurate note positioning (speed-integral distance)
 //   - Selected note rendering (green tint)
@@ -23,6 +27,7 @@ import { evaluateLineEventsWithLayers, distanceAt, computeWorldTransforms } from
 import type { WorldTransform } from "./events";
 import { evaluateEasing } from "./easings";
 import { BpmList } from "../utils/bpmList";
+import { getCachedMultiBeats } from "../stores/chartStore";
 import { generateCurveNotes } from "../utils/curveNoteTrack";
 import type { HitEffectManager } from "./hitEffects";
 import type { PendingNote } from "../stores/editorStore";
@@ -65,6 +70,15 @@ export interface RenderResult {
 const LINE_THICKNESS = 3;
 const NOTE_WIDTH_RATIO = 989 / 8000;
 const NOTE_HEIGHT_RATIO = 100 / 8000;
+
+/** Vertical distance scale: pixels per speed unit per canvas height (120/900 = 0.1333) */
+const DISTANCE_SCALE_RATIO = 120.0 / 900.0;
+/** Alpha for notes on the filtered-out side when above-only/below-only filter is active */
+const FILTERED_NOTE_ALPHA = 100 / 255;
+/** Alpha for ghost/preview notes (very faint) */
+const GHOST_NOTE_ALPHA = 40 / 255;
+/** Font size for text events, relative to canvas height */
+const TEXT_EVENT_FONT_RATIO = 40 / 900;
 
 // ============================================================
 // Note color palette
@@ -228,25 +242,14 @@ export class GameRenderer {
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     const bpmTimeAt = (beat: Beat) => bpmList.timeAt(beat);
-    const distanceScale = canvasHeight * (120.0 / 900.0);
+    const distanceScale = canvasHeight * DISTANCE_SCALE_RATIO;
     const noteW = canvasWidth * NOTE_WIDTH_RATIO * noteScale;
     const noteH = canvasWidth * NOTE_HEIGHT_RATIO * noteScale;
 
-    // ---- Build multi-highlight set ----
-    let multiBeats: Set<number> | null = null;
-    if (options.multiHighlight) {
-      const beatCounts = new Map<number, number>();
-      for (const line of lines) {
-        for (const note of line.notes) {
-          const b = beatToFloat(note.beat);
-          beatCounts.set(b, (beatCounts.get(b) ?? 0) + 1);
-        }
-      }
-      multiBeats = new Set<number>();
-      for (const [b, count] of beatCounts) {
-        if (count > 1) multiBeats.add(b);
-      }
-    }
+    // ---- Build multi-highlight set (cached — avoids O(all notes) per frame) ----
+    const multiBeats: Set<number> | null = options.multiHighlight
+      ? getCachedMultiBeats()
+      : null;
 
     // ---- Count combo for HUD ----
     let combo = 0;
@@ -355,6 +358,10 @@ export class GameRenderer {
     };
 
     ctx.save();
+    // Wrap all rendering in try-finally to guarantee ctx.restore() even if
+    // an exception is thrown. Without this, a rendering error permanently
+    // corrupts the canvas transform stack for all subsequent frames.
+    try {
     ctx.translate(screenX, screenY);
     ctx.rotate(-worldRotation);
 
@@ -515,7 +522,7 @@ export class GameRenderer {
           if (Math.abs(cnScreenY) > canvasHeight * 2) continue;
 
           const cnColor = NOTE_COLORS[cn.kind] ?? "#ffffff";
-          ctx.globalAlpha = 100 / 255;
+          ctx.globalAlpha = FILTERED_NOTE_ALPHA;
           this.drawNoteShape(ctx, cn, cnX, cnScreenY, noteW, noteH, cnColor, options.respack);
           ctx.globalAlpha = 1;
         }
@@ -533,7 +540,7 @@ export class GameRenderer {
         const pnX = (pn.x / CANVAS_WIDTH) * canvasWidth;
         const pnScreenY = pn.above ? -pnRawY : pnRawY;
         const pnColor = NOTE_COLORS[pn.kind] ?? "#ffffff";
-        ctx.globalAlpha = 40 / 255; // Very faint ghost
+        ctx.globalAlpha = GHOST_NOTE_ALPHA;
         this.drawNoteShape(ctx, { kind: pn.kind, above: pn.above } as Note, pnX, pnScreenY, noteW, noteH, pnColor, options.respack);
         ctx.globalAlpha = 1;
       }
@@ -575,7 +582,7 @@ export class GameRenderer {
 
       // Draw text event if present
       if (state.text) {
-        const textFontSize = Math.round(canvasHeight * 40 / 900);
+        const textFontSize = Math.round(canvasHeight * TEXT_EVENT_FONT_RATIO);
         // FIX 16: Per-event font field takes priority, then chart-level, then default
         const activeTextEvent = line.events.find(e =>
           e.kind === "text" &&
@@ -647,7 +654,9 @@ export class GameRenderer {
       ctx.stroke();
     }
 
-    ctx.restore();
+    } finally {
+      ctx.restore();
+    }
 
     // FIX 1: Parent-child hierarchy is now resolved via computeWorldTransforms()
     // using father_index. The old children[] recursion is removed.

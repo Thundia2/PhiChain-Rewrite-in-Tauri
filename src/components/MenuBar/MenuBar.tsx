@@ -1,3 +1,12 @@
+// ============================================================
+// Menu Bar — Top-level navigation menus
+//
+// Renders the horizontal menu bar (File, Edit, View, Panels,
+// Help) using menu definitions from useMenus(). Handles open/
+// close state, keyboard navigation, and click-outside dismiss.
+// Passes dialog and panel toggle callbacks down to useMenus.
+// ============================================================
+
 import { useState, useRef, useEffect } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import type { PanelId } from "../../types/editor";
@@ -14,6 +23,13 @@ export function MenuBar({
   onShowBatchLine,
   onShowLyricsSync,
   onShowOnDemandPanel,
+  onShowPasteSpecial,
+  onShowGoToBeat,
+  onShowExportDiff,
+  onShowSelectiveExport,
+  onShowSpinGenerator,
+  onShowShakeGenerator,
+  onShowNotePattern,
 }: {
   onTogglePanel?: (id: PanelId) => void;
   onResetLayout?: () => void;
@@ -24,8 +40,15 @@ export function MenuBar({
   onShowBatchLine?: () => void;
   onShowLyricsSync?: () => void;
   onShowOnDemandPanel?: (id: PanelId) => void;
+  onShowPasteSpecial?: () => void;
+  onShowGoToBeat?: () => void;
+  onShowExportDiff?: () => void;
+  onShowSelectiveExport?: () => void;
+  onShowSpinGenerator?: () => void;
+  onShowShakeGenerator?: () => void;
+  onShowNotePattern?: () => void;
 }) {
-  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel);
+  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel, onShowPasteSpecial, onShowGoToBeat, onShowExportDiff, onShowSelectiveExport, onShowSpinGenerator, onShowShakeGenerator, onShowNotePattern);
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 

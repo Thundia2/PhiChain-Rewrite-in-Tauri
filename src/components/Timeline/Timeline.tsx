@@ -11,6 +11,9 @@
 //   - Hold note resize (drag handles)
 //   - Pending/ghost note preview
 //   - Right-click context menu (curve note tracks)
+//
+// Recent change: Added onset detection integration — onset
+// markers are passed to the renderer and drawn as amber lines.
 // ============================================================
 
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
@@ -200,6 +203,8 @@ export function Timeline() {
         pendingNote: es.pendingNote,
         overlayLines: overlayLines.length > 0 ? overlayLines : undefined,
         overlayOpacity: es.timelineOverlayOpacity,
+        onsetMarkers: es.onsetMarkers,
+        onsetOpacity: useSettingsStore.getState().onsetOpacity,
       });
 
       rafRef.current = requestAnimationFrame(frame);

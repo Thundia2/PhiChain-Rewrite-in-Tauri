@@ -256,6 +256,8 @@ export interface PhichainChart {
   lines: Line[];
   /** RPE line group names (e.g. ["Default", "Background", "Effects"]) */
   line_groups?: string[];
+  /** RPE XY binding flag: when true, each moveXEvents must have a matching moveYEvents of equal length */
+  xybind?: boolean;
 }
 
 // ------ Project Metadata ------

@@ -11,22 +11,24 @@
 //
 // The timeline scrolls vertically (beats go from bottom to top).
 // The indicator line shows the current playback position.
+//
+// Recent change: Added onset detection marker rendering.
+// Amber horizontal lines show detected audio onsets behind notes.
 // ============================================================
 
 import type { Note, LineEvent, CurveNoteTrack } from "../types/chart";
 import { CANVAS_WIDTH, beatToFloat } from "../types/chart";
 import { generateCurveNotes } from "../utils/curveNoteTrack";
 import type { DragSelectionRect, PendingNote } from "../stores/editorStore";
+import {
+  BEAT_GUTTER_WIDTH,
+  BASE_PX_PER_BEAT,
+  ABOVE_NOTE_COLORS,
+} from "../constants/canvasConstants";
 
 // ============================================================
-// CONFIGURABLE: Layout constants
+// CONFIGURABLE: Timeline-specific sizing constants
 // ============================================================
-
-/** Width of the beat number gutter on the left */
-const BEAT_GUTTER_WIDTH = 36;
-
-/** Base pixels per beat (multiplied by zoom) */
-const BASE_PX_PER_BEAT = 80;
 
 /** Note width in timeline pixels */
 const NOTE_TL_WIDTH = 16;
@@ -38,24 +40,12 @@ const NOTE_TL_HEIGHT = 6;
 const HOLD_TL_WIDTH = 12;
 
 // ============================================================
-// Color palette
+// Color palette (Timeline keeps its own selection color — #90ee90,
+// distinct from GameRenderer/UnrolledRenderer's #32cd32)
 // ============================================================
 
-const NOTE_COLORS: Record<string, string> = {
-  tap: "#48b5ff",
-  drag: "#ffd24a",
-  flick: "#ff4a6a",
-  hold: "#4aff7a",
-};
-
-/** Event colors exported for use by KeyframeStrip */
-export const EVENT_COLORS: Record<string, string> = {
-  x: "#ff6b6b",
-  y: "#51cf66",
-  rotation: "#ffd43b",
-  opacity: "#cc5de8",
-  speed: "#4dabf7",
-};
+/** Timeline uses the shared above-note palette */
+const NOTE_COLORS = ABOVE_NOTE_COLORS;
 
 const SELECTION_COLOR = "#90ee90";
 
@@ -87,6 +77,10 @@ export interface TimelineRenderParams {
   /** Ghost notes from other lines rendered as overlay */
   overlayLines?: TimelineOverlayLine[];
   overlayOpacity?: number;
+  /** Detected onset markers to show as horizontal lines */
+  onsetMarkers?: { beat: number; strength: number }[] | null;
+  /** Opacity multiplier for onset markers (from settings) */
+  onsetOpacity?: number;
 }
 
 export class TimelineRenderer {
@@ -171,6 +165,16 @@ export class TimelineRenderer {
     // ---- Lane guides ----
     this.drawLaneGuides(ctx, lanes, noteAreaLeft, noteAreaWidth, canvasHeight);
 
+    // ---- Onset markers (behind notes, after grid) ----
+    if (params.onsetMarkers && params.onsetMarkers.length > 0) {
+      this.drawOnsetMarkers(
+        ctx, params.onsetMarkers,
+        minBeat, maxBeat, scrollBeat, zoom,
+        canvasWidth, canvasHeight,
+        params.onsetOpacity ?? 0.6,
+      );
+    }
+
     // ---- Notes ----
     const selectedSet = new Set(selectedNoteIndices);
 
@@ -219,6 +223,7 @@ export class TimelineRenderer {
           const nX = TimelineRenderer.noteXToPixel(note.x, noteAreaLeft, noteAreaWidth);
 
           ctx.save();
+          try {
           ctx.globalAlpha = overlayAlpha;
           ctx.setLineDash([3, 3]);
 
@@ -255,7 +260,9 @@ export class TimelineRenderer {
             );
           }
 
-          ctx.restore();
+          } finally {
+            ctx.restore();
+          }
         }
       }
     }
@@ -324,14 +331,19 @@ export class TimelineRenderer {
     scrollBeat: number,
     canvasWidth: number, canvasHeight: number,
   ) {
-    const step = density > 0 ? 1 / density : 1;
-    const startBeat = Math.floor(minBeat * density) / density;
+    // Use integer iteration to avoid floating-point drift.
+    // Previously `b += step` accumulated errors, causing grid lines
+    // to drift from actual note positions over many iterations.
+    const effectiveDensity = density > 0 ? density : 1;
+    const startI = Math.floor(minBeat * effectiveDensity);
+    const endI = Math.ceil((maxBeat + 1 / effectiveDensity) * effectiveDensity);
 
-    for (let b = startBeat; b <= maxBeat + step; b += step) {
+    for (let i = startI; i <= endI; i++) {
+      const b = i / effectiveDensity;
       const y = TimelineRenderer.beatToY(b, scrollBeat, pxPerBeat / BASE_PX_PER_BEAT, canvasHeight);
       if (y < 0 || y > canvasHeight) continue;
 
-      const isWholeBeat = Math.abs(b - Math.round(b)) < 0.001;
+      const isWholeBeat = i % effectiveDensity === 0;
 
       ctx.strokeStyle = isWholeBeat
         ? "rgba(255, 255, 255, 0.25)"
@@ -379,6 +391,72 @@ export class TimelineRenderer {
     ctx.moveTo(centerX, 0);
     ctx.lineTo(centerX, canvasHeight);
     ctx.stroke();
+  }
+
+  /**
+   * Draw onset detection markers as horizontal lines across the note area.
+   *
+   * Each marker is a semi-transparent amber line whose opacity scales
+   * with the onset's strength. Strong onsets are bright and easily
+   * visible; weak onsets are nearly invisible.
+   *
+   * Drawn AFTER the beat grid but BEFORE notes, so markers appear
+   * as a "suggestion layer" behind the actual chart content.
+   */
+  private drawOnsetMarkers(
+    ctx: CanvasRenderingContext2D,
+    markers: { beat: number; strength: number }[],
+    minBeat: number,
+    maxBeat: number,
+    scrollBeat: number,
+    zoom: number,
+    canvasWidth: number,
+    canvasHeight: number,
+    opacity: number,
+  ) {
+    // Binary search for the first visible marker to avoid iterating all
+    let startIdx = 0;
+    let lo = 0;
+    let hi = markers.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (markers[mid].beat < minBeat - 0.5) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    startIdx = lo;
+
+    for (let i = startIdx; i < markers.length; i++) {
+      const marker = markers[i];
+      if (marker.beat > maxBeat + 0.5) break; // Past visible range
+
+      const y = TimelineRenderer.beatToY(marker.beat, scrollBeat, zoom, canvasHeight);
+      if (y < -2 || y > canvasHeight + 2) continue;
+
+      // Opacity = base opacity × strength × user opacity setting
+      const alpha = marker.strength * opacity;
+      if (alpha < 0.02) continue; // Too faint to see
+
+      ctx.strokeStyle = `rgba(255, 170, 50, ${alpha})`;
+      ctx.lineWidth = Math.max(1, marker.strength * 2.5);
+
+      ctx.beginPath();
+      ctx.moveTo(BEAT_GUTTER_WIDTH, y);
+      ctx.lineTo(canvasWidth, y);
+      ctx.stroke();
+
+      // Small triangle marker on the left edge for strong onsets
+      if (marker.strength > 0.3) {
+        ctx.fillStyle = `rgba(255, 170, 50, ${alpha * 0.8})`;
+        ctx.beginPath();
+        ctx.moveTo(BEAT_GUTTER_WIDTH - 4, y - 2);
+        ctx.lineTo(BEAT_GUTTER_WIDTH, y);
+        ctx.lineTo(BEAT_GUTTER_WIDTH - 4, y + 2);
+        ctx.fill();
+      }
+    }
   }
 
   private drawNote(

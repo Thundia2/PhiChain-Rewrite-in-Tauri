@@ -7,6 +7,9 @@
 // Usage:
 //   const noteSize = useSettingsStore(s => s.noteSize);
 //   const update = useSettingsStore(s => s.updateSettings);
+//
+// Recent change: Added onset detection persistent settings —
+// onsetDetectionEnabled, onsetSensitivity, onsetOpacity, onsetSnapToGrid.
 // ============================================================
 
 import { create } from "zustand";
@@ -20,6 +23,7 @@ export interface SettingsState {
   musicVolume: number; // 0.0 - 1.0
   hitSoundVolume: number; // 0.0 - 1.0
   hitSoundEnabled: boolean;
+  audioLatencyMs: number; // Device audio latency compensation in ms (-300 to +300)
 
   // ---- Game preview ----
   noteSize: number;
@@ -38,7 +42,10 @@ export interface SettingsState {
   rotationSnapDegrees: number; // Snap angle interval in degrees (0 = off)
 
   // ---- Editor ----
-  defaultEditorView: "unified" | "classic";
+  defaultEditorView: "unified" | "classic" | "unrolled";
+
+  // ---- Line Strip ----
+  lineInactivityTimeoutSeconds: number; // Seconds with no upcoming note before a line is demoted to inactive (0 = disabled)
 
   // ---- Autosave ----
   autosaveEnabled: boolean;
@@ -61,6 +68,10 @@ export interface SettingsState {
   linePathBeatsBehind: number;
   linePathSampleInterval: number;
 
+  // ---- Beat grid (perpendicular beat subdivision overlay) ----
+  showBeatGrid: boolean;
+  beatGridBeatsAhead: number;
+
   // ---- Colors ----
   recentColors: [number, number, number][];
 
@@ -68,16 +79,49 @@ export interface SettingsState {
   recentEasings: string[];
   favoriteEasings: string[];
 
+  // ---- Unrolled Editor ----
+  unrolledDefaultAbove: boolean;  // Default above/below for placed notes (default true)
+
+  // ---- Onset Detection (all persisted across restarts) ----
+  /** Whether onset markers are visible on the timeline */
+  onsetDetectionEnabled: boolean;
+  /** Sensitivity 0.0 (few markers) to 1.0 (many markers) */
+  onsetSensitivity: number;
+  /** Opacity of onset markers on the timeline 0.0-1.0 */
+  onsetOpacity: number;
+  /** Whether to snap onset markers to the beat grid */
+  onsetSnapToGrid: boolean;
+
+  // ---- Onboarding ----
+  hasSeenOnboarding: boolean;
+
+  // ---- Hotkeys ----
+  hotkeyOverrides: Record<string, string>;
+
+  // ---- Custom presets ----
+  customPresets: import("../types/preset").EventPreset[];
+
   // ---- Actions ----
+  /** Merge partial settings changes. Auto-saves after update. */
   updateSettings: (changes: Partial<SettingsData>) => void;
+  /** Track an easing usage for "recently used" ordering. */
   recordEasingUse: (easing: string) => void;
   toggleFavoriteEasing: (easing: string) => void;
+  /** Override a hotkey binding. Action is the hotkey ID, key is the new keybinding string. */
+  setHotkeyOverride: (action: string, key: string) => void;
+  /** Reset a single hotkey to its default binding. */
+  resetHotkey: (action: string) => void;
+  /** Reset all hotkey overrides to defaults. */
+  resetAllHotkeys: () => void;
+  addCustomPreset: (preset: import("../types/preset").EventPreset) => void;
+  /** Load settings from localStorage. Runs migration for old format. */
   loadSettings: () => Promise<void>;
+  /** Persist current settings to localStorage. */
   saveSettings: () => Promise<void>;
 }
 
-// The subset of state that gets persisted
-type SettingsData = Omit<SettingsState, "updateSettings" | "loadSettings" | "saveSettings">;
+// The subset of state that gets persisted (exclude all action methods)
+type SettingsData = Omit<SettingsState, "updateSettings" | "loadSettings" | "saveSettings" | "recordEasingUse" | "toggleFavoriteEasing" | "setHotkeyOverride" | "resetHotkey" | "resetAllHotkeys" | "addCustomPreset">;
 
 const STORAGE_KEY = "phichain-settings";
 
@@ -86,6 +130,7 @@ const DEFAULTS: SettingsData = {
   musicVolume: 0.8,
   hitSoundVolume: 0.6,
   hitSoundEnabled: true,
+  audioLatencyMs: 0,
   noteSize: 1.0,
   backgroundDim: 0.6,
   showHitEffects: true,
@@ -97,6 +142,7 @@ const DEFAULTS: SettingsData = {
   timelineFollowPlayback: true,
   rotationSnapDegrees: 15,
   defaultEditorView: "unified" as const,
+  lineInactivityTimeoutSeconds: 5,
   autosaveEnabled: true,
   autosaveIntervalSeconds: 120,
   quickTransitionDuration: 4,
@@ -108,9 +154,19 @@ const DEFAULTS: SettingsData = {
   linePathBeatsAhead: 8,
   linePathBeatsBehind: 4,
   linePathSampleInterval: 0.5,
+  showBeatGrid: false,
+  beatGridBeatsAhead: 4,
   recentColors: [],
   recentEasings: [],
   favoriteEasings: ["linear", "ease_out_sine", "ease_out_cubic"],
+  unrolledDefaultAbove: true,
+  onsetDetectionEnabled: false,
+  onsetSensitivity: 0.5,
+  onsetOpacity: 0.6,
+  onsetSnapToGrid: false,
+  hasSeenOnboarding: false,
+  hotkeyOverrides: {},
+  customPresets: [],
 };
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -137,6 +193,34 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         : [...s.favoriteEasings, easing];
       return { favoriteEasings: favs };
     });
+    get().saveSettings();
+  },
+
+  setHotkeyOverride: (action, key) => {
+    set((s) => ({
+      hotkeyOverrides: { ...s.hotkeyOverrides, [action]: key },
+    }));
+    get().saveSettings();
+  },
+
+  resetHotkey: (action) => {
+    set((s) => {
+      const next = { ...s.hotkeyOverrides };
+      delete next[action];
+      return { hotkeyOverrides: next };
+    });
+    get().saveSettings();
+  },
+
+  resetAllHotkeys: () => {
+    set({ hotkeyOverrides: {} });
+    get().saveSettings();
+  },
+
+  addCustomPreset: (preset) => {
+    set((s) => ({
+      customPresets: [...s.customPresets, preset],
+    }));
     get().saveSettings();
   },
 
@@ -169,6 +253,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         musicVolume: state.musicVolume,
         hitSoundVolume: state.hitSoundVolume,
         hitSoundEnabled: state.hitSoundEnabled,
+        audioLatencyMs: state.audioLatencyMs,
         noteSize: state.noteSize,
         backgroundDim: state.backgroundDim,
         showHitEffects: state.showHitEffects,
@@ -180,6 +265,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         timelineFollowPlayback: state.timelineFollowPlayback,
         rotationSnapDegrees: state.rotationSnapDegrees,
         defaultEditorView: state.defaultEditorView,
+        lineInactivityTimeoutSeconds: state.lineInactivityTimeoutSeconds,
         autosaveEnabled: state.autosaveEnabled,
         autosaveIntervalSeconds: state.autosaveIntervalSeconds,
         quickTransitionDuration: state.quickTransitionDuration,
@@ -191,9 +277,19 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         linePathBeatsAhead: state.linePathBeatsAhead,
         linePathBeatsBehind: state.linePathBeatsBehind,
         linePathSampleInterval: state.linePathSampleInterval,
+        showBeatGrid: state.showBeatGrid,
+        beatGridBeatsAhead: state.beatGridBeatsAhead,
+        unrolledDefaultAbove: state.unrolledDefaultAbove,
+        onsetDetectionEnabled: state.onsetDetectionEnabled,
+        onsetSensitivity: state.onsetSensitivity,
+        onsetOpacity: state.onsetOpacity,
+        onsetSnapToGrid: state.onsetSnapToGrid,
         recentColors: state.recentColors,
         recentEasings: state.recentEasings,
         favoriteEasings: state.favoriteEasings,
+        hasSeenOnboarding: state.hasSeenOnboarding,
+        hotkeyOverrides: state.hotkeyOverrides,
+        customPresets: state.customPresets,
       };
       await writeJson("settings.json", data);
     } catch {

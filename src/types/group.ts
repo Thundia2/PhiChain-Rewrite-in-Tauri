@@ -124,7 +124,8 @@ export function computeMemberDelay(
  * Migrate a legacy (v1) group to the new typed format.
  * v1 groups have no `type` field and may contain both lines and notes.
  */
-export function migrateGroup(raw: any): EditorGroup {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function migrateGroup(raw: Record<string, any>): EditorGroup {
   // Already new format
   if (raw.type === "line" || raw.type === "note") return raw as EditorGroup;
 
@@ -136,7 +137,8 @@ export function migrateGroup(raw: any): EditorGroup {
 
   if (hasNotes && !hasLines) {
     // Migrate to NoteGroup
-    const notes: GroupNoteRef[] = (raw.notes ?? []).map((n: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notes: GroupNoteRef[] = (raw.notes ?? []).map((n: Record<string, any>) => {
       const stag = n.staggerOffset ? beatToFloat(n.staggerOffset) : 0;
       if (stag !== 0) hasNonZeroStagger = true;
       return {
@@ -161,7 +163,8 @@ export function migrateGroup(raw: any): EditorGroup {
   }
 
   // Default: migrate to LineGroup (drop notes if mixed)
-  const lines: GroupLineRef[] = (raw.lines ?? []).map((l: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lines: GroupLineRef[] = (raw.lines ?? []).map((l: Record<string, any>) => {
     const stag = l.staggerOffset ? beatToFloat(l.staggerOffset) : 0;
     if (stag !== 0) hasNonZeroStagger = true;
     return {

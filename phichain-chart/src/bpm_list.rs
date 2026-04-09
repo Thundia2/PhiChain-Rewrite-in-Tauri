@@ -89,13 +89,16 @@ impl BpmList {
     }
 
     pub fn time_at(&self, beat: Beat) -> f32 {
-        let point = self
+        let point = match self
             .0
             .iter()
             .take_while(|p| p.beat.value() < beat.value())
             .last()
             .or_else(|| self.0.first())
-            .expect("No bpm points available");
+        {
+            Some(p) => p,
+            None => return 0.0,
+        };
 
         point.time + (beat.value() - point.beat.value()) * (60.0 / point.bpm.max(f32::EPSILON))
     }
@@ -106,13 +109,16 @@ impl BpmList {
 
     /// Get the beat at the given time without converting the result to [`Beat`]
     pub fn beat_at_f32(&self, time: f32) -> f32 {
-        let point = self
+        let point = match self
             .0
             .iter()
             .take_while(|p| p.time <= time)
             .last()
             .or_else(|| self.0.first())
-            .expect("No bpm points available");
+        {
+            Some(p) => p,
+            None => return 0.0,
+        };
 
         point.beat.value() + (time - point.time) * point.bpm / 60.0
     }

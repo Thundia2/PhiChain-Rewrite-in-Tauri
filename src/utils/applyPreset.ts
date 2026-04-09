@@ -3,7 +3,7 @@
 // ============================================================
 
 import type { EventPreset } from "../types/preset";
-import type { LineEvent, LineEventKind, EasingType } from "../types/chart";
+import type { LineEvent, LineEventKind } from "../types/chart";
 import { floatToBeat } from "../types/chart";
 import { useChartStore } from "../stores/chartStore";
 import { useAudioStore } from "../stores/audioStore";
@@ -56,28 +56,48 @@ export function applyPresetAtPlayhead(
 
   const newEvents: LineEvent[] = [];
   for (const tmpl of preset.template) {
-    const startBeat = insertBeat + tmpl.beatOffset * durationScale;
-    const endBeat = insertBeat + tmpl.endBeatOffset * durationScale;
+    // Builtin format uses `beatOffset` + `value`; EventTemplate uses `startBeatOffset` + `startValue`/`endValue`
+    if ("beatOffset" in tmpl) {
+      // ---- Builtin template entry ----
+      const startBeat = insertBeat + tmpl.beatOffset * durationScale;
+      const endBeat = insertBeat + tmpl.endBeatOffset * durationScale;
 
-    let value: LineEvent["value"];
-    if ("constant" in tmpl.value) {
-      value = { constant: resolveToken(tmpl.value.constant, tmpl.kind, currentValues) };
+      let value: LineEvent["value"];
+      if ("constant" in tmpl.value) {
+        value = { constant: resolveToken(tmpl.value.constant, tmpl.kind, currentValues) };
+      } else {
+        value = {
+          transition: {
+            start: resolveToken(tmpl.value.transition.start, tmpl.kind, currentValues),
+            end: resolveToken(tmpl.value.transition.end, tmpl.kind, currentValues),
+            easing: tmpl.value.transition.easing,
+          },
+        };
+      }
+
+      newEvents.push({
+        kind: tmpl.kind,
+        start_beat: floatToBeat(startBeat),
+        end_beat: floatToBeat(endBeat),
+        value,
+      });
     } else {
-      value = {
-        transition: {
-          start: resolveToken(tmpl.value.transition.start, tmpl.kind, currentValues),
-          end: resolveToken(tmpl.value.transition.end, tmpl.kind, currentValues),
-          easing: tmpl.value.transition.easing,
-        },
-      };
-    }
+      // ---- EventTemplate entry (from Preset Builder) ----
+      const startBeatF = tmpl.startBeatOffset[0] + tmpl.startBeatOffset[1] / tmpl.startBeatOffset[2];
+      const endBeatF = tmpl.endBeatOffset[0] + tmpl.endBeatOffset[1] / tmpl.endBeatOffset[2];
+      const startBeat = insertBeat + startBeatF * durationScale;
+      const endBeat = insertBeat + endBeatF * durationScale;
 
-    newEvents.push({
-      kind: tmpl.kind,
-      start_beat: floatToBeat(startBeat),
-      end_beat: floatToBeat(endBeat),
-      value,
-    });
+      const startVal = resolveToken(tmpl.startValue, tmpl.kind, currentValues);
+      const endVal = resolveToken(tmpl.endValue, tmpl.kind, currentValues);
+
+      newEvents.push({
+        kind: tmpl.kind,
+        start_beat: floatToBeat(startBeat),
+        end_beat: floatToBeat(endBeat),
+        value: { transition: { start: startVal, end: endVal, easing: tmpl.easing } },
+      });
+    }
   }
 
   if (newEvents.length > 0) {

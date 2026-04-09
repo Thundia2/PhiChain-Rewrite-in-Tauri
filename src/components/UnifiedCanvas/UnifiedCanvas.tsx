@@ -1,13 +1,24 @@
 // ============================================================
 // Unified Canvas — Interactive Game Preview
 //
+// Recent change: Added effectiveOffset (chart.offset + audioLatencyMs)
+// to 5 game preview rendering sites for audio latency compensation.
+// Editor interaction paths (getCurrentBeat, click/drag/selection)
+// remain on raw chart.offset.
+//
 // The main editing surface for the unified editor. Renders the
 // game preview using the augmented GameRenderer (with RenderResult)
 // and handles all mouse interaction: line/note selection, handle
 // dragging, note placement, viewport zoom/pan.
 //
-// Phase 1: Render loop + line/note selection via click.
-// Phase 2: Handles, note placement, drag selection, viewport.
+// Overlay drawing is delegated to CanvasOverlays.ts (pure
+// drawing functions). Drag state management lives in
+// CanvasInteraction.ts. Coordinate math in NoteProjection.ts.
+//
+// Recent change: Extracted 12 mouse handler functions to
+// CanvasMouseHandlers.ts (6.1 refactor) — handle drag, step
+// record, pattern commit, note placement, note hit, bookmark
+// hit, eraser, record capture, ghost note computations.
 // ============================================================
 
 import { useRef, useEffect, useCallback, useState } from "react";
@@ -19,12 +30,10 @@ import { useRespackStore } from "../../stores/respackStore";
 import { useGroupStore } from "../../stores/groupStore";
 import { useBookmarkStore } from "../../stores/bookmarkStore";
 import { GameRenderer, type RenderResult, type RenderedLineInfo } from "../../canvas/gameRenderer";
-import { evaluateLineEventsWithLayers } from "../../canvas/events";
 import { HitEffectManager } from "../../canvas/hitEffects";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat, floatToBeat, CANVAS_WIDTH } from "../../types/chart";
-import type { NoteKind, Note, Beat } from "../../types/chart";
-import { snapBeat } from "../../utils/beat";
+import { getXSnapPositions } from "../../utils/xSnap";
 
 // Interaction modules
 import {
@@ -35,6 +44,17 @@ import {
   hitTestTranslateHandle,
   hitTestRotationHandle,
   hitTestLineBody,
+  drawBookmarkOverlay,
+  drawPatternGhostNotes,
+  drawXSnapGrid,
+  drawLinePathPreview,
+  drawRecordModeIndicator,
+  drawStepRecordStatus,
+  drawCursorHUD,
+  drawGhostBeatLabel,
+  drawBeatGrid,
+  drawEraserPendingMarks,
+  drawEraserCountIndicator,
 } from "./CanvasOverlays";
 import {
   type DragState,
@@ -42,10 +62,9 @@ import {
   type RotateDragState,
   type HoldPlacementDragState,
   type HoldResizeDragState,
-  startTranslateDrag,
+  type EraserDragState,
   updateTranslateDrag,
   finishTranslateDrag,
-  startRotateDrag,
   updateRotateDrag,
   finishRotateDrag,
   startPanDrag,
@@ -59,25 +78,25 @@ import {
 } from "./CanvasInteraction";
 import {
   screenToLineLocal,
-  computeGhostNote,
-  projectClickToNote,
   beatFromScreenDistance,
 } from "./NoteProjection";
 import { CanvasContextMenu } from "./CanvasContextMenu";
-
-// ============================================================
-// Tool → NoteKind mapping
-// ============================================================
-const TOOL_TO_NOTE_KIND: Record<string, NoteKind> = {
-  place_tap: "tap",
-  place_drag: "drag",
-  place_flick: "flick",
-  place_hold: "hold",
-};
-
-function isPlaceTool(tool: string): boolean {
-  return tool in TOOL_TO_NOTE_KIND;
-}
+import {
+  isPlaceTool,
+  tryHandleDrag,
+  tryStepRecordPlace,
+  tryPatternCommit,
+  tryNotePlacement,
+  tryNoteHit,
+  tryBookmarkHit,
+  startEraserDrag,
+  updateEraserDrag,
+  captureRecordKeyframe,
+  handleStepRecordStream,
+  computeStepRecordGhost,
+  computePatternGhosts,
+  computePlacementGhost,
+} from "./CanvasMouseHandlers";
 
 export function UnifiedCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -91,6 +110,8 @@ export function UnifiedCanvas() {
   const hiddenSetRef = useRef<Set<number>>(new Set());
   const hiddenVisRef = useRef<Record<number, boolean>>({});
   const spaceDownRef = useRef(false);
+  // Raw cursor position in screen pixels (for screen-space overlays like ghost beat label)
+  const rawCursorRef = useRef<{ x: number; y: number } | null>(null);
 
   const isLoaded = useChartStore((s) => s.isLoaded);
 
@@ -104,14 +125,18 @@ export function UnifiedCanvas() {
   // Build BpmList (memoized on bpm_list reference)
   const chart = useChartStore((s) => s.chart);
   const bpmListRef = useRef<BpmList | null>(null);
+  // Mouse position in canvas coordinates for HUD display
+  const cursorInfoRef = useRef<{ canvasX: number; canvasY: number; beat: number } | null>(null);
   const bpmListDataRef = useRef(chart.bpm_list);
+  /* eslint-disable react-hooks/refs -- intentional derived-value memoization via ref */
   if (bpmListDataRef.current !== chart.bpm_list) {
     bpmListDataRef.current = chart.bpm_list;
     bpmListRef.current = new BpmList(chart.bpm_list);
   }
-  if (!bpmListRef.current) {
+  if (bpmListRef.current == null) {
     bpmListRef.current = new BpmList(chart.bpm_list);
   }
+  /* eslint-enable react-hooks/refs */
 
   // ---- Get current beat ----
   const getCurrentBeat = useCallback((): number => {
@@ -278,12 +303,16 @@ export function UnifiedCanvas() {
         ctx.scale(vp.zoom, vp.zoom);
       }
 
+      // Audio latency compensation for game preview visuals only.
+      // Editor interaction helpers (getCurrentBeat/getCurrentTime) stay on raw chart.offset.
+      const effectiveOffset = cs.chart.offset + ss.audioLatencyMs / 1000;
+
       // Render and capture result for hit-testing
       const renderResult = renderer.render(
         cs.chart.lines,
         bpmList,
         latestTime,
-        cs.chart.offset,
+        effectiveOffset,
         rect.width,
         rect.height,
         {
@@ -383,187 +412,134 @@ export function UnifiedCanvas() {
           }
         }
 
-        // Draw bookmarks as diamond markers (visibility-filtered + selection-aware)
+        // ---- Bookmark diamond markers ----
         const bs = useBookmarkStore.getState();
-        const allBookmarks = bs.bookmarks;
-        if (allBookmarks.length > 0) {
-          const bmRange = bs.visibilityRange;
-          const bmCurrentBeat = bpmList.beatAtFloat(latestTime - cs.chart.offset);
-
-          for (const bm of allBookmarks) {
-            const bmBeat = bm.beat[0] + bm.beat[1] / bm.beat[2];
-            if (Math.abs(bmBeat - bmCurrentBeat) > bmRange) continue;
-
-            const lineInfo = renderResult.lines.find((l) => l.lineIndex === bm.lineIndex);
-            if (!lineInfo) continue;
-
-            const distance = Math.abs(bmBeat - bmCurrentBeat);
-            const fadeFactor = 1 - (distance / bmRange);
-
-            const bmX = (bm.x / CANVAS_WIDTH) * rect.width;
-            const cos = Math.cos(-lineInfo.rotation);
-            const sin = Math.sin(-lineInfo.rotation);
-            const bmScreenX = lineInfo.screenX + bmX * cos * lineInfo.scaleX;
-            const bmScreenY = lineInfo.screenY + bmX * sin * lineInfo.scaleY;
-
-            const isSelected = bs.selectedBookmarkIds.includes(bm.id);
-            const size = isSelected ? 10 : 8;
-
-            ctx.save();
-            ctx.translate(bmScreenX, bmScreenY);
-            ctx.beginPath();
-            ctx.moveTo(0, -size);
-            ctx.lineTo(size, 0);
-            ctx.lineTo(0, size);
-            ctx.lineTo(-size, 0);
-            ctx.closePath();
-
-            ctx.fillStyle = bm.color;
-            ctx.globalAlpha = 0.5 + (fadeFactor * 0.5);
-            ctx.fill();
-
-            if (isSelected) {
-              ctx.strokeStyle = "#fff";
-              ctx.lineWidth = 2;
-              ctx.globalAlpha = 1;
-            } else {
-              ctx.strokeStyle = bm.color;
-              ctx.lineWidth = 1;
-              ctx.globalAlpha = fadeFactor * 0.6;
-            }
-            ctx.stroke();
-            ctx.restore();
-          }
+        if (bs.bookmarks.length > 0) {
+          const bmCurrentBeat = bpmList.beatAtFloat(latestTime - effectiveOffset);
+          drawBookmarkOverlay(
+            ctx, bs.bookmarks, bmCurrentBeat, bs.visibilityRange,
+            bs.selectedBookmarkIds, renderResult.lines, rect.width,
+          );
         }
 
         // ---- Pattern ghost note preview ----
-        // When pattern tool is active, render semi-transparent ghost notes
-        // generated by the pattern config at their canvas positions.
         if (es.activeTool === "place_pattern" && es.patternGhostNotes.length > 0 && es.selectedLineIndex !== null) {
           const patternLineInfo = renderResult.lines.find(
             (l) => l.lineIndex === es.selectedLineIndex,
           );
           if (patternLineInfo) {
-            const cos = Math.cos(-patternLineInfo.rotation);
-            const sin = Math.sin(-patternLineInfo.rotation);
-            ctx.save();
-            ctx.globalAlpha = 0.45;
-            for (const ghost of es.patternGhostNotes) {
-              // Convert note X (Phigros coords, -675..675) to screen position
-              const noteX = (ghost.x / CANVAS_WIDTH) * rect.width;
-              const sx = patternLineInfo.screenX + noteX * cos * patternLineInfo.scaleX;
-              const sy = patternLineInfo.screenY + noteX * sin * patternLineInfo.scaleY;
+            drawPatternGhostNotes(ctx, es.patternGhostNotes, patternLineInfo, rect.width);
+          }
+        }
 
-              const size = 6;
-              ctx.fillStyle = ghost.kind === "tap" ? "#4fc3f7"
-                : ghost.kind === "drag" ? "#aed581"
-                : ghost.kind === "flick" ? "#ef5350"
-                : "#ffb74d"; // hold
+        // ---- X snap grid (with active lane highlight) ----
+        if (es.xSnapEnabled && es.lanes > 0 && es.selectedLineIndex !== null) {
+          const snapLineInfo = renderResult.lines.find(
+            (l) => l.lineIndex === es.selectedLineIndex,
+          );
+          if (snapLineInfo) {
+            drawXSnapGrid(
+              ctx, getXSnapPositions(es.lanes), snapLineInfo, rect.width,
+              es.pendingNote?.x ?? null, // Highlight the lane the ghost note is on
+            );
+          }
+        }
 
-              ctx.beginPath();
-              ctx.arc(sx, sy, size, 0, Math.PI * 2);
-              ctx.fill();
-
-              // Draw a small border
-              ctx.strokeStyle = "#fff";
-              ctx.lineWidth = 1;
-              ctx.stroke();
-            }
-            ctx.restore();
+        // ---- Beat grid perpendicular lines ----
+        if (ss.showBeatGrid && es.selectedLineIndex !== null) {
+          const beatGridLine = cs.chart.lines[es.selectedLineIndex];
+          const beatGridLineInfo = renderResult.lines.find(
+            (l) => l.lineIndex === es.selectedLineIndex,
+          );
+          if (beatGridLine && beatGridLineInfo && bpmListRef.current) {
+            const bgCurrentBeat = bpmList.beatAtFloat(latestTime - effectiveOffset);
+            drawBeatGrid(
+              ctx,
+              beatGridLineInfo,
+              beatGridLine,
+              bpmListRef.current,
+              latestTime - effectiveOffset,
+              bgCurrentBeat,
+              es.density,
+              ss.beatGridBeatsAhead,
+              rect.width,
+              rect.height,
+            );
           }
         }
 
         // ---- Line path preview ----
-        // Draw dotted trail showing line's past and future positions
         if (ss.showLinePath && es.selectedLineIndex !== null) {
-          const currentBeat = bpmList.beatAtFloat(latestTime - cs.chart.offset);
-          const aheadBeats = ss.linePathBeatsAhead ?? 8;
-          const behindBeats = ss.linePathBeatsBehind ?? 4;
-          const sampleInterval = ss.linePathSampleInterval ?? 0.5;
           const line = cs.chart.lines[es.selectedLineIndex];
-
           if (line) {
-            ctx.save();
-            const dots: { sx: number; sy: number; alpha: number; isFuture: boolean }[] = [];
-
-            // Sample future positions
-            for (let b = currentBeat + sampleInterval; b <= currentBeat + aheadBeats; b += sampleInterval) {
-              const state = evaluateLineEventsWithLayers(line.events, line.event_layers, b);
-              const sx = (state.x / 1350 + 0.5) * rect.width;
-              const sy = (0.5 - state.y / 900) * rect.height;
-              const progress = (b - currentBeat) / aheadBeats;
-              dots.push({ sx, sy, alpha: Math.max(0.1, 1 - progress), isFuture: true });
-            }
-
-            // Sample past positions
-            for (let b = currentBeat - sampleInterval; b >= currentBeat - behindBeats; b -= sampleInterval) {
-              if (b < 0) break;
-              const state = evaluateLineEventsWithLayers(line.events, line.event_layers, b);
-              const sx = (state.x / 1350 + 0.5) * rect.width;
-              const sy = (0.5 - state.y / 900) * rect.height;
-              const progress = (currentBeat - b) / behindBeats;
-              dots.push({ sx, sy, alpha: Math.max(0.1, 1 - progress), isFuture: false });
-            }
-
-            // Draw connecting dashed line
-            if (dots.length > 1) {
-              ctx.setLineDash([4, 4]);
-              ctx.lineWidth = 1;
-              ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-              ctx.beginPath();
-              const allDots = dots.sort((a, b) => {
-                // Sort by temporal order for a connected line
-                if (a.isFuture !== b.isFuture) return a.isFuture ? 1 : -1;
-                return 0;
-              });
-              ctx.moveTo(allDots[0].sx, allDots[0].sy);
-              for (let i = 1; i < allDots.length; i++) {
-                ctx.lineTo(allDots[i].sx, allDots[i].sy);
-              }
-              ctx.stroke();
-              ctx.setLineDash([]);
-            }
-
-            // Draw dots
-            for (const dot of dots) {
-              ctx.globalAlpha = dot.alpha;
-              ctx.fillStyle = dot.isFuture ? "#42a5f5" : "#ff9800";
-              ctx.beginPath();
-              ctx.arc(dot.sx, dot.sy, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-
-            ctx.restore();
+            const currentBeat = bpmList.beatAtFloat(latestTime - effectiveOffset);
+            drawLinePathPreview(
+              ctx, line.events, line.event_layers, currentBeat,
+              ss.linePathBeatsAhead ?? 8, ss.linePathBeatsBehind ?? 4,
+              ss.linePathSampleInterval ?? 0.5, rect.width, rect.height,
+            );
           }
         }
 
-        // ---- Record mode indicator ----
-        // Draw pulsing red border when record mode is active
+        // ---- Record mode indicator (screen-space) ----
         if (es.recordMode) {
-          ctx.save();
-          // Reset to identity to draw in screen space
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300);
-          ctx.strokeStyle = `rgba(255, 50, 50, ${0.4 + pulse * 0.4})`;
-          ctx.lineWidth = 3;
-          ctx.strokeRect(1.5, 1.5, rect.width - 3, rect.height - 3);
-
-          // "REC" label
-          ctx.fillStyle = `rgba(255, 50, 50, ${0.7 + pulse * 0.3})`;
-          ctx.font = "bold 12px sans-serif";
-          ctx.fillText("● REC", 10, 20);
-
-          // Restore viewport transform
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          ctx.translate(vp.offsetX, vp.offsetY);
-          ctx.scale(vp.zoom, vp.zoom);
-          ctx.restore();
+          drawRecordModeIndicator(ctx, dpr, rect.width, rect.height);
         }
 
-        // Draw drag selection rectangle (in logical space, viewport-transformed)
+        // ---- Step record status (screen-space) ----
+        if (es.stepRecordActive) {
+          drawStepRecordStatus(
+            ctx, es.stepRecordNoteKind, es.stepRecordStepSize,
+            es.stepRecordCurrentBeat, es.density, es.stepRecordNotesPlaced,
+            es.recordMode ? 36 : 20, dpr,
+          );
+        }
+
+        // ---- Cursor coordinate HUD (screen-space) ----
+        if (cursorInfoRef.current) {
+          const ci = cursorInfoRef.current;
+          drawCursorHUD(ctx, ci.canvasX, ci.canvasY, ci.beat, dpr, canvas.height / dpr);
+        }
+
+        // ---- Ghost beat label (screen-space, near cursor) ----
+        // Shows the snapped beat + note kind icon when placing a note
+        if (es.pendingNote && rawCursorRef.current) {
+          drawGhostBeatLabel(
+            ctx,
+            es.pendingNote.beat,
+            es.pendingNote.kind,
+            rawCursorRef.current.x,
+            rawCursorRef.current.y,
+            dpr,
+          );
+        }
+
+        // ---- Drag selection rectangle (viewport-space) ----
         if (dragRef.current?.type === "drag_select") {
           const ds = dragRef.current;
           drawSelectionRect(ctx, ds.startX, ds.startY, ds.currentX, ds.currentY);
+        }
+
+        // ---- Eraser drag pending marks (red X on hit notes + count indicator) ----
+        if (dragRef.current?.type === "eraser_drag") {
+          const eraserInfo = getSelectedLineInfo();
+          if (eraserInfo) {
+            drawEraserPendingMarks(
+              ctx,
+              (dragRef.current as EraserDragState).hitNoteIndices,
+              eraserInfo,
+            );
+            // Floating "Erasing N" counter near cursor (screen-space)
+            if (rawCursorRef.current) {
+              drawEraserCountIndicator(
+                ctx,
+                (dragRef.current as EraserDragState).hitNoteIndices.size,
+                rawCursorRef.current.x,
+                rawCursorRef.current.y,
+                dpr,
+              );
+            }
+          }
         }
 
         ctx.restore(); // Restore from viewport transform
@@ -616,123 +592,71 @@ export function UnifiedCanvas() {
 
     const selectedLineInfo = getSelectedLineInfo();
 
-    // ---- Handle hit-testing (only when a line is selected) ----
+    // ---- Handle drag (rotation/translate) ----
     if (selectedLineInfo) {
-      const screenRotation = -selectedLineInfo.rotation;
-
-      // Check rotation handle first (higher priority — smaller target)
-      if (hitTestRotationHandle(
-        mouseX, mouseY,
-        selectedLineInfo.screenX, selectedLineInfo.screenY,
-        screenRotation, rect.width,
-      )) {
-        const rotDeg = (selectedLineInfo.rotation * 180) / Math.PI;
-        dragRef.current = startRotateDrag(
-          selectedLineInfo.lineIndex,
-          selectedLineInfo.screenX, selectedLineInfo.screenY,
-          // Get Phigros coords for ghost line
-          cs.chart.lines[selectedLineInfo.lineIndex]
-            ? (evaluateLineEventsWithLayers(
-                cs.chart.lines[selectedLineInfo.lineIndex].events,
-                cs.chart.lines[selectedLineInfo.lineIndex].event_layers,
-                getCurrentBeat(),
-              )).x
-            : 0,
-          cs.chart.lines[selectedLineInfo.lineIndex]
-            ? (evaluateLineEventsWithLayers(
-                cs.chart.lines[selectedLineInfo.lineIndex].events,
-                cs.chart.lines[selectedLineInfo.lineIndex].event_layers,
-                getCurrentBeat(),
-              )).y
-            : 0,
-          rotDeg,
+      const chartLine = cs.chart.lines[selectedLineInfo.lineIndex];
+      if (chartLine) {
+        const handleResult = tryHandleDrag(
+          mouseX, mouseY, selectedLineInfo, chartLine,
+          getCurrentBeat(), rect.width,
         );
-        es.setCanvasInteractionMode("dragging_rotate");
-        return;
-      }
-
-      // Check translate handle or line body
-      if (
-        hitTestTranslateHandle(mouseX, mouseY, selectedLineInfo.screenX, selectedLineInfo.screenY) ||
-        hitTestLineBody(mouseX, mouseY, selectedLineInfo.screenX, selectedLineInfo.screenY, screenRotation, rect.width)
-      ) {
-        const line = cs.chart.lines[selectedLineInfo.lineIndex];
-        if (line) {
-          const currentBeat = getCurrentBeat();
-          const state = evaluateLineEventsWithLayers(line.events, line.event_layers, currentBeat);
-          const rotDeg = (state.rotation * 180) / Math.PI;
-          dragRef.current = startTranslateDrag(
-            selectedLineInfo.lineIndex,
-            mouseX, mouseY,
-            state.x, state.y, rotDeg,
-          );
-          es.setCanvasInteractionMode("dragging_translate");
+        if (handleResult) {
+          dragRef.current = handleResult.drag;
+          es.setCanvasInteractionMode(handleResult.interactionMode);
+          return;
         }
+      }
+    }
+
+    // ---- Step Recording Mode ----
+    if (es.stepRecordActive && selectedLineInfo) {
+      const stepResult = tryStepRecordPlace(
+        mouseX, mouseY, selectedLineInfo,
+        es.stepRecordNoteKind, es.stepRecordCurrentBeat, es.density,
+        es.xSnapEnabled, es.lanes, rect.width,
+      );
+      if (stepResult) {
+        cs.addNote(selectedLineInfo.lineIndex, stepResult.note);
+        es.advanceStepBeat();
+        es.setStepRecordMouseDown(true);
+        es.setStepRecordLastSnapX(stepResult.snappedX);
         return;
       }
     }
 
+    // ---- Pattern tool: commit ghost notes ----
+    if (es.activeTool === "place_pattern" && es.patternGhostNotes.length > 0 && selectedLineInfo) {
+      const notes = tryPatternCommit(es.patternGhostNotes, es.density);
+      cs.batchAddNotes(selectedLineInfo.lineIndex, notes);
+      es.setPatternGhostNotes([]);
+      return;
+    }
+
     // ---- Note placement (place tools: tap/drag/flick/hold) ----
     if (isPlaceTool(es.activeTool) && selectedLineInfo) {
-      const noteKind = TOOL_TO_NOTE_KIND[es.activeTool];
       const line = cs.chart.lines[selectedLineInfo.lineIndex];
-      if (line && noteKind) {
-        const bpmList = bpmListRef.current;
-        if (bpmList) {
-          let placement: { beat: Beat; x: number; above: boolean } | null = null;
-
-          if (es.beatSyncPlacement) {
-            // Beat-sync mode: beat from playhead, X and above from click
-            const local = screenToLineLocal(
-              mouseX, mouseY,
-              selectedLineInfo.screenX, selectedLineInfo.screenY,
-              selectedLineInfo.rotation, rect.width,
-            );
-            const currentBeatFloat = getCurrentBeat();
-            const beat = snapBeat(currentBeatFloat, es.density);
-            const x = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, Math.round(local.noteX)));
-            placement = { beat, x, above: local.above };
-          } else {
-            // Normal mode: beat from perpendicular distance
-            placement = projectClickToNote(
-              mouseX, mouseY,
-              selectedLineInfo.screenX, selectedLineInfo.screenY,
-              selectedLineInfo.rotation,
-              line,
-              getCurrentTime(),
-              bpmList,
-              rect.width, rect.height,
-              es.density,
-            );
+      const bpmList = bpmListRef.current;
+      if (line && bpmList) {
+        const placeResult = tryNotePlacement(
+          mouseX, mouseY, selectedLineInfo, line,
+          es.activeTool, bpmList, rect.width, rect.height,
+          es.beatSyncPlacement, es.density, es.xSnapEnabled, es.lanes,
+          getCurrentBeat(), getCurrentTime(),
+        );
+        if (placeResult) {
+          cs.addNote(selectedLineInfo.lineIndex, placeResult.note);
+          if (placeResult.needsHoldDrag) {
+            const addedIdx = cs.chart.lines[selectedLineInfo.lineIndex].notes.length - 1;
+            dragRef.current = {
+              type: "hold_placement",
+              lineIndex: selectedLineInfo.lineIndex,
+              noteIndex: addedIdx,
+              headBeat: placeResult.headBeat,
+              above: placeResult.above,
+            } as HoldPlacementDragState;
+            es.setCanvasInteractionMode("placing_note");
           }
-
-          if (placement) {
-            const newNote: Note = {
-              kind: noteKind,
-              above: placement.above,
-              beat: placement.beat,
-              x: placement.x,
-              speed: 1,
-            };
-            if (noteKind === "hold") {
-              newNote.hold_beat = [0, 1, es.density] as Beat;
-            }
-            cs.addNote(selectedLineInfo.lineIndex, newNote);
-
-            // For hold notes in normal mode, start a placement drag to set the hold length
-            if (noteKind === "hold" && !es.beatSyncPlacement) {
-              const addedNoteIndex = cs.chart.lines[selectedLineInfo.lineIndex].notes.length - 1;
-              dragRef.current = {
-                type: "hold_placement",
-                lineIndex: selectedLineInfo.lineIndex,
-                noteIndex: addedNoteIndex,
-                headBeat: beatToFloat(placement.beat),
-                above: placement.above,
-              } as HoldPlacementDragState;
-              es.setCanvasInteractionMode("placing_note");
-            }
-            return;
-          }
+          return;
         }
       }
     }
@@ -740,96 +664,54 @@ export function UnifiedCanvas() {
     // ---- Note hit-testing (select tool) ----
     const renderResult = lastRenderResultRef.current;
     if (renderResult && es.activeTool === "select") {
-      // First check notes on the selected line
+      // Check notes on the selected line
       if (selectedLineInfo) {
-        for (let j = selectedLineInfo.notes.length - 1; j >= 0; j--) {
-          const noteInfo = selectedLineInfo.notes[j];
-          const dx = mouseX - noteInfo.screenX;
-          const dy = mouseY - noteInfo.screenY;
-          const halfW = Math.max(noteInfo.width / 2, 12);
-          const halfH = Math.max(noteInfo.height / 2, 12);
-          if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) {
-            // Check if this note is already selected → start drag or hold resize
-            if (es.selectedNoteIndices.includes(noteInfo.noteIndex) && !e.ctrlKey && !e.metaKey) {
-              const line = cs.chart.lines[selectedLineInfo.lineIndex];
-              if (line) {
-                const bpmList = bpmListRef.current;
-                if (bpmList) {
-                  const note = line.notes[noteInfo.noteIndex];
-
-                  // Hold note resize: if single hold note selected and click is in tail region
-                  if (note && note.kind === "hold" && note.hold_beat && es.selectedNoteIndices.length === 1) {
-                    // Check if click is further from line than the note head (tail region)
-                    const clickLocal = screenToLineLocal(
-                      mouseX, mouseY,
-                      selectedLineInfo.screenX, selectedLineInfo.screenY,
-                      selectedLineInfo.rotation, rect.width,
-                    );
-                    const headLocal = screenToLineLocal(
-                      noteInfo.screenX, noteInfo.screenY,
-                      selectedLineInfo.screenX, selectedLineInfo.screenY,
-                      selectedLineInfo.rotation, rect.width,
-                    );
-                    if (clickLocal.perpDistance > headLocal.perpDistance) {
-                      // Click is in tail region — start hold resize
-                      dragRef.current = {
-                        type: "hold_resize",
-                        lineIndex: selectedLineInfo.lineIndex,
-                        noteIndex: noteInfo.noteIndex,
-                        headBeat: beatToFloat(note.beat),
-                        above: note.above,
-                      } as HoldResizeDragState;
-                      es.setCanvasInteractionMode("dragging_translate");
-                      return;
-                    }
-                  }
-
-                  // Regular note move drag
-                  const curBeat = getCurrentBeat();
-                  const speedEvents = line.events.filter((ev) => ev.kind === "speed");
-                  let currentSpeed = 1;
-                  for (const se of speedEvents) {
-                    if (beatToFloat(se.start_beat) <= curBeat && curBeat <= beatToFloat(se.end_beat)) {
-                      if ("constant" in se.value) currentSpeed = se.value.constant;
-                      else if ("transition" in se.value) currentSpeed = se.value.transition.start;
-                      break;
-                    }
-                  }
-                  const bpmAtCurrent = bpmList.bpmAtTime(getCurrentTime());
-
-                  dragRef.current = startNoteDrag(
-                    selectedLineInfo.lineIndex,
-                    es.selectedNoteIndices,
-                    line.notes,
-                    mouseX, mouseY,
-                    selectedLineInfo.screenX, selectedLineInfo.screenY,
-                    selectedLineInfo.rotation,
-                    rect.width, rect.height,
-                    bpmAtCurrent,
-                    currentSpeed,
-                  );
-                  es.setCanvasInteractionMode("dragging_translate");
+        const line = cs.chart.lines[selectedLineInfo.lineIndex];
+        const bpmList = bpmListRef.current;
+        if (line && bpmList) {
+          const noteAction = tryNoteHit(
+            mouseX, mouseY, selectedLineInfo, line,
+            es.selectedNoteIndices, bpmList, rect.width, rect.height,
+            getCurrentBeat(), getCurrentTime(), e.ctrlKey || e.metaKey,
+          );
+          if (noteAction) {
+            switch (noteAction.type) {
+              case "start_note_drag":
+                dragRef.current = startNoteDrag(
+                  noteAction.lineIndex, noteAction.noteIndices, noteAction.notes,
+                  noteAction.mouseX, noteAction.mouseY,
+                  noteAction.lineScreenX, noteAction.lineScreenY, noteAction.lineRotation,
+                  noteAction.canvasWidth, noteAction.canvasHeight,
+                  noteAction.bpmAtCurrent, noteAction.currentSpeed,
+                );
+                es.setCanvasInteractionMode("dragging_translate");
+                return;
+              case "start_hold_resize":
+                dragRef.current = {
+                  type: "hold_resize",
+                  lineIndex: noteAction.lineIndex,
+                  noteIndex: noteAction.noteIndex,
+                  headBeat: noteAction.headBeat,
+                  above: noteAction.above,
+                } as HoldResizeDragState;
+                es.setCanvasInteractionMode("dragging_translate");
+                return;
+              case "select":
+                es.setNoteSelection([noteAction.noteIndex]);
+                es.showFloatingInspector(e.clientX, e.clientY, "note");
+                return;
+              case "toggle":
+                es.toggleNoteSelection(noteAction.noteIndex);
+                if (es.selectedNoteIndices.length > 1) {
+                  es.showFloatingInspector(e.clientX, e.clientY, "multi_note");
                 }
-              }
-              return;
+                return;
             }
-
-            if (e.ctrlKey || e.metaKey) {
-              es.toggleNoteSelection(noteInfo.noteIndex);
-              const newIndices = es.selectedNoteIndices;
-              if (newIndices.length > 1) {
-                es.showFloatingInspector(e.clientX, e.clientY, "multi_note");
-              }
-            } else {
-              es.setNoteSelection([noteInfo.noteIndex]);
-              es.showFloatingInspector(e.clientX, e.clientY, "note");
-            }
-            return;
           }
         }
       }
 
-      // Then check notes on other lines
+      // Check notes on other lines (stays inline — needs renderer)
       const noteHit = renderer.hitTestNote(mouseX, mouseY, renderResult);
       if (noteHit) {
         es.selectLine(noteHit.lineIndex);
@@ -840,53 +722,29 @@ export function UnifiedCanvas() {
 
       // ---- Bookmark hit-testing ----
       const bsHit = useBookmarkStore.getState();
-      if (bsHit.bookmarks.length > 0) {
-        const bpmHit = bpmListRef.current;
-        if (bpmHit) {
-          const { currentTime: ct } = useAudioStore.getState();
-          const curBeatHit = bpmHit.beatAtFloat(ct - cs.chart.offset);
-
-          for (const bm of bsHit.bookmarks) {
-            const bmBeat = bm.beat[0] + bm.beat[1] / bm.beat[2];
-            if (Math.abs(bmBeat - curBeatHit) > bsHit.visibilityRange) continue;
-
-            const lineInfo = renderResult.lines.find((l) => l.lineIndex === bm.lineIndex);
-            if (!lineInfo) continue;
-
-            const bmXPos = (bm.x / CANVAS_WIDTH) * rect.width;
-            const cosR = Math.cos(-lineInfo.rotation);
-            const sinR = Math.sin(-lineInfo.rotation);
-            const bmSX = lineInfo.screenX + bmXPos * cosR * lineInfo.scaleX;
-            const bmSY = lineInfo.screenY + bmXPos * sinR * lineInfo.scaleY;
-
-            const dx = mouseX - bmSX;
-            const dy = mouseY - bmSY;
-            if (Math.abs(dx) <= 12 && Math.abs(dy) <= 12) {
-              if (e.shiftKey) {
-                bsHit.toggleBookmarkSelection(bm.id);
-              } else {
-                bsHit.selectBookmark(bm.id);
-              }
-              return;
-            }
-          }
+      if (bsHit.bookmarks.length > 0 && bpmListRef.current) {
+        const curBeatHit = bpmListRef.current.beatAtFloat(
+          useAudioStore.getState().currentTime - cs.chart.offset,
+        );
+        const hitId = tryBookmarkHit(
+          mouseX, mouseY, bsHit.bookmarks, bsHit.visibilityRange,
+          curBeatHit, renderResult.lines, rect.width,
+        );
+        if (hitId) {
+          if (e.shiftKey) bsHit.toggleBookmarkSelection(hitId);
+          else bsHit.selectBookmark(hitId);
+          return;
         }
       }
     }
 
-    // ---- Eraser tool — delete note on click ----
-    if (es.activeTool === "eraser" && renderResult && selectedLineInfo) {
-      for (let j = selectedLineInfo.notes.length - 1; j >= 0; j--) {
-        const noteInfo = selectedLineInfo.notes[j];
-        const dx = mouseX - noteInfo.screenX;
-        const dy = mouseY - noteInfo.screenY;
-        const halfW = Math.max(noteInfo.width / 2, 12);
-        const halfH = Math.max(noteInfo.height / 2, 12);
-        if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) {
-          cs.removeNotes(selectedLineInfo.lineIndex, [noteInfo.noteIndex]);
-          return;
-        }
-      }
+    // ---- Eraser tool: start drag erase ----
+    // Starts a drag that accumulates hit notes — batch-deleted on mouseUp
+    if (es.activeTool === "eraser" && selectedLineInfo) {
+      const { drag: eraserDrag } = startEraserDrag(mouseX, mouseY, selectedLineInfo);
+      dragRef.current = eraserDrag;
+      es.setCanvasInteractionMode("drag_selecting"); // closest existing mode for non-idle drag cursor
+      return;
     }
 
     // ---- Line hit-testing (falls through from above) ----
@@ -924,11 +782,24 @@ export function UnifiedCanvas() {
     const rect = container.getBoundingClientRect();
     const rawMouseX = e.clientX - rect.left;
     const rawMouseY = e.clientY - rect.top;
+    // Store raw cursor position for screen-space overlays (ghost beat label, eraser count)
+    rawCursorRef.current = { x: rawMouseX, y: rawMouseY };
 
     // Convert to logical (viewport-adjusted) coordinates
     const vp = useEditorStore.getState().canvasViewport;
     const mouseX = (rawMouseX - vp.offsetX) / vp.zoom;
     const mouseY = (rawMouseY - vp.offsetY) / vp.zoom;
+
+    // Update cursor info for HUD coordinate display
+    // Canvas space: X from -675 to +675, Y from -450 to +450
+    const canvasX = (mouseX / rect.width - 0.5) * CANVAS_WIDTH;
+    const canvasY = (0.5 - mouseY / rect.height) * (CANVAS_WIDTH * (900 / 1350));
+    const cs = useChartStore.getState();
+    const as_ = useAudioStore.getState();
+    const curBeat = bpmListRef.current
+      ? bpmListRef.current.beatAtFloat(Math.max(0, as_.currentTime - cs.chart.offset))
+      : 0;
+    cursorInfoRef.current = { canvasX, canvasY, beat: curBeat };
 
     const drag = dragRef.current;
 
@@ -995,6 +866,16 @@ export function UnifiedCanvas() {
           }
           return;
         }
+        case "eraser_drag": {
+          // Update eraser drag — hit-test notes at current position
+          const eraserDrag = drag as EraserDragState;
+          const eraserLineInfo = getSelectedLineInfo();
+          // Guard: only update if line selection hasn't changed mid-drag
+          if (eraserLineInfo && eraserLineInfo.lineIndex === eraserDrag.lineIndex) {
+            updateEraserDrag(eraserDrag, mouseX, mouseY, eraserLineInfo);
+          }
+          return;
+        }
       }
     }
 
@@ -1002,33 +883,18 @@ export function UnifiedCanvas() {
     {
       const es = useEditorStore.getState();
       const { isPlaying } = useAudioStore.getState();
-      if (es.recordMode && isPlaying && es.selectedLineIndex !== null) {
-        const bpmList = bpmListRef.current;
-        if (bpmList) {
-          const cs = useChartStore.getState();
-          const currentBeat = bpmList.beatAtFloat(
-            useAudioStore.getState().currentTime - cs.chart.offset,
-          );
-
-          // Convert mouse position to canvas coordinates
-          const canvasX = (mouseX / rect.width - 0.5) * 1350;
-          const canvasY = (0.5 - mouseY / rect.height) * 900;
-
-          const channels = es.recordModeChannels;
-          const kf: { beat: number; x?: number; y?: number; rotation?: number } = {
-            beat: useSettingsStore.getState().recordSnapToDensity
-              ? beatToFloat(snapBeat(currentBeat, es.density))
-              : currentBeat,
-          };
-          if (channels.x) kf.x = canvasX;
-          if (channels.y) kf.y = canvasY;
-
-          // Only add if different from last keyframe (avoid duplicates at same beat)
-          const last = es.recordedKeyframes[es.recordedKeyframes.length - 1];
-          if (!last || Math.abs(last.beat - kf.beat) > 0.01) {
-            es.addRecordedKeyframe(kf);
-          }
-        }
+      if (es.recordMode && isPlaying && es.selectedLineIndex !== null && bpmListRef.current) {
+        const currentBeat = bpmListRef.current.beatAtFloat(
+          useAudioStore.getState().currentTime - cs.chart.offset,
+        );
+        const lastBeat = es.recordedKeyframes.length > 0
+          ? es.recordedKeyframes[es.recordedKeyframes.length - 1].beat : null;
+        const kf = captureRecordKeyframe(
+          mouseX, mouseY, rect.width, rect.height, currentBeat,
+          es.recordModeChannels, lastBeat,
+          useSettingsStore.getState().recordSnapToDensity, es.density,
+        );
+        if (kf) es.addRecordedKeyframe(kf);
       }
     }
 
@@ -1060,55 +926,56 @@ export function UnifiedCanvas() {
       );
       canvas.style.cursor = cursor;
 
+      // ---- Step record: hold-to-stream ----
+      if (es.stepRecordActive && es.stepRecordMouseDown && es.xSnapEnabled && es.lanes > 0) {
+        const streamResult = handleStepRecordStream(
+          mouseX, mouseY, selectedLineInfo,
+          es.stepRecordNoteKind, es.stepRecordCurrentBeat, es.density,
+          es.lanes, es.stepRecordLastSnapX, rect.width,
+        );
+        if (streamResult) {
+          useChartStore.getState().addNote(selectedLineInfo.lineIndex, streamResult.note);
+          es.advanceStepBeat();
+          es.setStepRecordLastSnapX(streamResult.snappedX);
+        }
+      }
+
+      // ---- Step record ghost note ----
+      if (es.stepRecordActive) {
+        const ghost = computeStepRecordGhost(
+          mouseX, mouseY, selectedLineInfo,
+          es.stepRecordNoteKind, es.stepRecordCurrentBeat, es.density,
+          es.xSnapEnabled, es.lanes, rect.width,
+        );
+        es.setPendingNote(ghost);
+        // Don't return — let cursor handling continue, but skip normal ghost
+      }
+
+      // ---- Pattern tool: compute ghost notes ----
+      if (es.activeTool === "place_pattern") {
+        const anchorBeat = bpmListRef.current
+          ? bpmListRef.current.beatAtFloat(Math.max(0, useAudioStore.getState().currentTime - useChartStore.getState().chart.offset))
+          : 0;
+        es.setPatternGhostNotes(computePatternGhosts(es.patternConfig, anchorBeat));
+      } else if (es.patternGhostNotes.length > 0) {
+        // Clear ghost notes when switching away from pattern tool
+        es.setPatternGhostNotes([]);
+      }
+
       // ---- Ghost note preview for placement tools ----
-      if (isPlaceTool(es.activeTool) && !isOverRotation && !isOverTranslate) {
-        const noteKind = TOOL_TO_NOTE_KIND[es.activeTool];
-        const cs = useChartStore.getState();
-        const line = cs.chart.lines[selectedLineInfo.lineIndex];
+      if (!es.stepRecordActive && isPlaceTool(es.activeTool) && !isOverRotation && !isOverTranslate) {
+        const line = useChartStore.getState().chart.lines[selectedLineInfo.lineIndex];
         const bpmList = bpmListRef.current;
-
-        if (line && bpmList && noteKind) {
-          let ghostResult: { beat: Beat; x: number; kind: string; above: boolean } | null = null;
-
-          if (es.beatSyncPlacement) {
-            // Beat-sync mode: ghost at current playhead beat
-            const local = screenToLineLocal(
-              mouseX, mouseY,
-              selectedLineInfo.screenX, selectedLineInfo.screenY,
-              selectedLineInfo.rotation, rect.width,
-            );
-            const currentBeatFloat = getCurrentBeat();
-            const beat = snapBeat(currentBeatFloat, es.density);
-            const x = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, Math.round(local.noteX)));
-            ghostResult = { beat, x, kind: noteKind, above: local.above };
-          } else {
-            // Normal mode: ghost from perpendicular distance
-            ghostResult = computeGhostNote(
-              mouseX, mouseY,
-              selectedLineInfo.screenX, selectedLineInfo.screenY,
-              selectedLineInfo.rotation,
-              line,
-              getCurrentTime(),
-              bpmList,
-              rect.width, rect.height,
-              es.density,
-              noteKind,
-            );
-          }
-
-          if (ghostResult) {
-            es.setPendingNote({
-              beat: ghostResult.beat,
-              x: ghostResult.x,
-              kind: ghostResult.kind as NoteKind,
-              above: ghostResult.above,
-            });
-          } else {
-            es.setPendingNote(null);
-          }
+        if (line && bpmList) {
+          const ghost = computePlacementGhost(
+            mouseX, mouseY, selectedLineInfo, line,
+            es.activeTool, bpmList, rect.width, rect.height,
+            es.beatSyncPlacement, es.density, es.xSnapEnabled, es.lanes,
+            getCurrentBeat(), getCurrentTime(),
+          );
+          es.setPendingNote(ghost);
         }
       } else {
-        // Clear ghost note when not in placement mode or hovering handles
         if (es.pendingNote) {
           es.setPendingNote(null);
         }
@@ -1120,10 +987,16 @@ export function UnifiedCanvas() {
         es.setPendingNote(null);
       }
     }
-  }, [getCurrentTime, getSelectedLineInfo]);
+  }, [getCurrentBeat, getCurrentTime, getSelectedLineInfo]);
 
   // ---- Mouse Up Handler ----
   const handleMouseUp = useCallback(() => {
+    // ---- Step record: release mouse ----
+    const esUp = useEditorStore.getState();
+    if (esUp.stepRecordActive && esUp.stepRecordMouseDown) {
+      esUp.setStepRecordMouseDown(false);
+    }
+
     const drag = dragRef.current;
     if (!drag) return;
 
@@ -1162,7 +1035,8 @@ export function UnifiedCanvas() {
           if (hitNotes.length > 0) {
             es.setNoteSelection(hitNotes);
             const targetType = hitNotes.length > 1 ? "multi_note" : "note";
-            es.showFloatingInspector(e.clientX, e.clientY, targetType);
+            // Use drag end coordinates since the mouse event is not available in this callback
+            es.showFloatingInspector(drag.currentX, drag.currentY, targetType);
           } else {
             es.clearSelection();
           }
@@ -1181,6 +1055,18 @@ export function UnifiedCanvas() {
       case "hold_resize":
         // Hold drag already updated note during mousemove — nothing to finalize
         break;
+      case "eraser_drag": {
+        // Batch-delete all notes hit during the eraser drag (single undo entry)
+        const eraserDrag = drag as EraserDragState;
+        if (eraserDrag.hitNoteIndices.size > 0) {
+          const cs = useChartStore.getState();
+          cs.removeNotes(
+            eraserDrag.lineIndex,
+            Array.from(eraserDrag.hitNoteIndices),
+          );
+        }
+        break;
+      }
     }
 
     dragRef.current = null;
@@ -1265,10 +1151,11 @@ export function UnifiedCanvas() {
     }
   }, []);
 
-  // ---- Mouse leave: clear ghost note ----
+  // ---- Mouse leave: clear ghost note and screen-space cursor ref ----
   const handleMouseLeave = useCallback(() => {
     const canvas = canvasRef.current;
     if (canvas) canvas.style.cursor = "default";
+    rawCursorRef.current = null;
     const es = useEditorStore.getState();
     if (es.pendingNote) {
       es.setPendingNote(null);
@@ -1299,7 +1186,6 @@ export function UnifiedCanvas() {
           // Compute canvas-space coordinates
           const rect = canvasEl.getBoundingClientRect();
           const vp = es.canvasViewport;
-          const dpr = window.devicePixelRatio || 1;
           const pixelX = (e.clientX - rect.left);
           const pixelY = (e.clientY - rect.top);
           const centerX = rect.width / 2 + vp.offsetX;

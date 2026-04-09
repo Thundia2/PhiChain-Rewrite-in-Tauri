@@ -5,6 +5,7 @@
 // Extracted to avoid duplication across editor panels.
 // ============================================================
 
+import type React from "react";
 import { useState, useEffect } from "react";
 import type { Beat } from "../../types/chart";
 
@@ -13,6 +14,7 @@ import type { Beat } from "../../types/chart";
  * Returns null for intermediate typing states (empty, "-", ".", "-.") so the
  * input isn't clobbered while the user is still typing (e.g. a negative number).
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function safeParseNumber(v: string): number | null {
   if (v === "" || v === "-" || v === "." || v === "-.") return null;
   const n = Number(v);
@@ -81,6 +83,57 @@ export function Field({
   );
 }
 
+/**
+ * Standalone numeric input that handles intermediate typing states correctly.
+ * Uses local string state so the user can type "-", "0.", "-." etc.
+ * without the input being clobbered by React's controlled value.
+ * Only commits valid numbers to the parent via onChange.
+ */
+export function NumericInput({
+  value,
+  onChange,
+  step,
+  min,
+  max,
+  style,
+  placeholder,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  step?: string | number;
+  min?: number;
+  max?: number;
+  style?: React.CSSProperties;
+  placeholder?: string;
+}) {
+  const [localValue, setLocalValue] = useState(String(value));
+
+  // Sync external value → local when the prop changes from outside
+  useEffect(() => {
+    setLocalValue(String(value));
+  }, [value]);
+
+  return (
+    <input
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      placeholder={placeholder}
+      value={localValue}
+      style={style}
+      onChange={(e) => {
+        const raw = e.target.value;
+        // Always update local state so intermediate characters ("-", ".", "-.") are preserved
+        setLocalValue(raw);
+        // Only commit valid numbers to the parent
+        const n = safeParseNumber(raw);
+        if (n !== null) onChange(n);
+      }}
+    />
+  );
+}
+
 /** Select dropdown field */
 export function SelectField({
   label,
@@ -136,9 +189,12 @@ export function BeatField({
   const [localNum, setLocalNum] = useState(String(beat[1]));
   const [localDen, setLocalDen] = useState(String(beat[2]));
 
-  useEffect(() => { setLocalWhole(String(beat[0])); }, [beat[0]]);
-  useEffect(() => { setLocalNum(String(beat[1])); }, [beat[1]]);
-  useEffect(() => { setLocalDen(String(beat[2])); }, [beat[2]]);
+  const beatWhole = beat[0];
+  const beatNum = beat[1];
+  const beatDen = beat[2];
+  useEffect(() => { setLocalWhole(String(beatWhole)); }, [beatWhole]);
+  useEffect(() => { setLocalNum(String(beatNum)); }, [beatNum]);
+  useEffect(() => { setLocalDen(String(beatDen)); }, [beatDen]);
 
   return (
     <label className="flex items-center gap-2 text-xs">

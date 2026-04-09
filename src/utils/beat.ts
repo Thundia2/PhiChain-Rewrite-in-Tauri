@@ -49,7 +49,8 @@ function lcm(a: number, b: number): number {
  * and [0, 6, 4] becomes [1, 1, 2]
  */
 export function reduceBeat(beat: Beat): Beat {
-  let [whole, numer, denom] = beat;
+  let [whole, numer] = beat;
+  const denom = beat[2];
 
   // Handle negative numerators
   if (numer < 0) {

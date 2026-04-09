@@ -72,6 +72,8 @@ export type BuiltinShaderName =
 
 /** A shader effect instance in the chart */
 export interface ShaderEffect {
+  /** Unique ID for stable React keys (auto-assigned, not serialized) */
+  _id?: string;
   /** Start beat of the effect (RPE format: [bar, numerator, denominator]) */
   start: Beat;
   /** End beat of the effect */
@@ -92,6 +94,8 @@ export interface ShaderEffect {
 
 /** Video background configuration */
 export interface VideoBackground {
+  /** Unique ID for stable React keys (auto-assigned, not serialized) */
+  _id?: string;
   /** Path to the video file (relative to chart root) */
   path: string;
   /** Beat at which video playback starts (default: [0,0,1]) */

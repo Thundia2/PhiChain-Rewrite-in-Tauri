@@ -356,5 +356,9 @@ export function convertPhichainToRpe(
     rpeChart.judgeLineGroup = ["Default"];
   }
 
+  if (chart.xybind === true) {
+    rpeChart.xybind = true;
+  }
+
   return JSON.stringify(rpeChart, null, 2);
 }

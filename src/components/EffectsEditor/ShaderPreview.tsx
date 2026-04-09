@@ -8,7 +8,7 @@
 // Falls back to CSS filter approximations if WebGL is unavailable.
 // ============================================================
 
-import { useRef, useEffect, useMemo, useState, useCallback } from "react";
+import { useRef, useEffect, useMemo, useState } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useAudioStore } from "../../stores/audioStore";
 import type { ShaderEffect, AnimatedVariable, AnimationEvent } from "../../types/extra";
@@ -46,17 +46,17 @@ export function ShaderPreview({ effect }: ShaderPreviewProps) {
 
   // Resolve current uniform values at the current beat
   const uniforms = useMemo(() => {
-    return resolveUniforms(effect, currentBeat, currentTime);
-  }, [effect, currentBeat, currentTime]);
+    return resolveUniforms(effect, currentBeat);
+  }, [effect, currentBeat]);
 
   const shaderSource = SHADER_SOURCES[effect.shader] ?? null;
 
   // Store uniforms and currentTime in refs so the render loop doesn't
   // need to depend on them (avoids teardown/recreation 60x/sec).
   const uniformsRef = useRef(uniforms);
-  uniformsRef.current = uniforms;
   const currentTimeRef = useRef(currentTime);
-  currentTimeRef.current = currentTime;
+  useEffect(() => { uniformsRef.current = uniforms; }, [uniforms]);
+  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
 
   // ---- Initialize WebGL ----
   useEffect(() => {
@@ -78,7 +78,7 @@ export function ShaderPreview({ effect }: ShaderPreviewProps) {
       } else {
         setWebglFailed(true);
       }
-    } catch (_err) {
+    } catch {
       setWebglFailed(true);
     }
 
@@ -88,7 +88,8 @@ export function ShaderPreview({ effect }: ShaderPreviewProps) {
         glRef.current = null;
       }
     };
-  }, [shaderSource]); // Removed illustrationImage — handled by separate effect below
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- illustrationImage handled by separate effect below
+  }, [shaderSource]);
 
   // ---- Re-upload texture when illustration changes ----
   useEffect(() => {
@@ -241,12 +242,13 @@ function CSSFilterFallback({
     }
   }, [effect.shader, uniforms]);
 
-  // Glitch animation overlay
+  // Glitch animation overlay — stable random offsets per mount
   const isGlitch = effect.shader === "glitch";
+  const [glitchOffsets] = useState(() => ({ top: Math.random() * 30, bottom: Math.random() * 30 }));
   const glitchStyle: React.CSSProperties = isGlitch
     ? {
         animation: "glitch-shift 0.3s steps(2) infinite alternate",
-        clipPath: `inset(${Math.random() * 30}% 0 ${Math.random() * 30}% 0)`,
+        clipPath: `inset(${glitchOffsets.top}% 0 ${glitchOffsets.bottom}% 0)`,
       }
     : {};
 
@@ -514,7 +516,6 @@ function cleanupWebGL(state: WebGLState) {
 function resolveUniforms(
   effect: ShaderEffect,
   currentBeat: number,
-  _currentTime: number,
 ): Record<string, number> {
   const defaults = SHADER_DEFAULTS[effect.shader] ?? {};
   const vars = effect.vars ?? {};

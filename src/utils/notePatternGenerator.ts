@@ -1,6 +1,47 @@
-import type { Note, NoteKind } from "../types/chart";
+// Recent change: Added "custom" shape that evaluates user-typed math
+// expressions via expr-eval. Supports t (0-1), pi, e, trig functions.
+
+import { Parser } from "expr-eval";
+import type { Note } from "../types/chart";
 import { floatToBeat } from "../types/chart";
 import type { NotePatternConfig } from "../types/notePattern";
+
+// Shared parser instance — expr-eval Parser is stateless and reusable
+const exprParser = new Parser();
+
+/**
+ * Compile a user expression string into a function of t.
+ * Returns null if the expression is invalid.
+ * The returned function evaluates the expression for a given t (0 to 1).
+ */
+export function compileExpression(expression: string): ((t: number) => number) | null {
+  try {
+    const parsed = exprParser.parse(expression);
+    // Test evaluation at t=0 to catch errors early
+    parsed.evaluate({ t: 0, pi: Math.PI, e: Math.E });
+    return (t: number) => {
+      return parsed.evaluate({ t, pi: Math.PI, e: Math.E });
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate an expression string. Returns null if valid, or an error message.
+ */
+export function validateExpression(expression: string): string | null {
+  try {
+    const parsed = exprParser.parse(expression);
+    // Test at a few points to catch runtime errors (division by zero at specific t, etc.)
+    parsed.evaluate({ t: 0, pi: Math.PI, e: Math.E });
+    parsed.evaluate({ t: 0.5, pi: Math.PI, e: Math.E });
+    parsed.evaluate({ t: 1, pi: Math.PI, e: Math.E });
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : "Invalid expression";
+  }
+}
 
 export function generateNotePattern(config: NotePatternConfig): Note[] {
   const {
@@ -14,6 +55,11 @@ export function generateNotePattern(config: NotePatternConfig): Note[] {
   const notes: Note[] = [];
   const effectiveAmplitude = amplitude ?? Math.abs(endX - startX) / 2;
   const centerX = (startX + endX) / 2;
+
+  // Pre-compile custom expression once before the loop (avoids re-parsing per note)
+  const customFn = shape === "custom" && config.expression
+    ? compileExpression(config.expression)
+    : null;
 
   for (let i = 0; i < noteCount; i++) {
     const t = noteCount === 1 ? 0 : i / (noteCount - 1);
@@ -54,6 +100,15 @@ export function generateNotePattern(config: NotePatternConfig): Note[] {
       case "random":
         x = startX + Math.random() * (endX - startX);
         break;
+      case "custom": {
+        // Use pre-compiled expression. Falls back to linear if invalid.
+        if (customFn) {
+          try { x = customFn(t); } catch { x = startX + t * (endX - startX); }
+        } else {
+          x = startX + t * (endX - startX);
+        }
+        break;
+      }
       default:
         x = startX + t * (endX - startX);
     }

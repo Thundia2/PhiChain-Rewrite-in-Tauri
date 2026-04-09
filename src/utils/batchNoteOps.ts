@@ -1,3 +1,5 @@
+// Recent change: Added selectByRange() for beat/X/side-filtered
+// note selection (Feature D — Select by Beat Range).
 import type { Note, Beat } from "../types/chart";
 import { beatToFloat, floatToBeat } from "../types/chart";
 
@@ -42,4 +44,37 @@ export function offsetX(
     noteIndex,
     changes: { x: notes[noteIndex].x + delta },
   }));
+}
+
+/**
+ * Select notes on a line matching a beat range and optional X/side constraints.
+ *
+ * @param notes       - The line's note array
+ * @param startBeat   - Start of beat range (inclusive, float)
+ * @param endBeat     - End of beat range (inclusive, float)
+ * @param xMin        - Minimum X position (null = no constraint)
+ * @param xMax        - Maximum X position (null = no constraint)
+ * @param sideFilter  - "all" | "above" | "below"
+ * @returns Array of matching note indices
+ */
+export function selectByRange(
+  notes: Note[],
+  startBeat: number,
+  endBeat: number,
+  xMin: number | null = null,
+  xMax: number | null = null,
+  sideFilter: "all" | "above" | "below" = "all",
+): number[] {
+  const result: number[] = [];
+  for (let i = 0; i < notes.length; i++) {
+    const note = notes[i];
+    const beat = beatToFloat(note.beat);
+    if (beat < startBeat || beat > endBeat) continue;
+    if (xMin !== null && note.x < xMin) continue;
+    if (xMax !== null && note.x > xMax) continue;
+    if (sideFilter === "above" && !note.above) continue;
+    if (sideFilter === "below" && note.above) continue;
+    result.push(i);
+  }
+  return result;
 }

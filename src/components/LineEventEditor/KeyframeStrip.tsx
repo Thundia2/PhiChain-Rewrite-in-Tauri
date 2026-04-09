@@ -13,7 +13,7 @@ import { useAudioStore } from "../../stores/audioStore";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../types/chart";
 import type { LineEvent, LineEventKind } from "../../types/chart";
-import { EVENT_COLORS } from "../../constants/eventColors";
+import { EVENT_COLORS, KIND_SHORT } from "../../constants/eventConfig";
 
 interface KeyframeStripProps {
   lineIndex: number;
@@ -124,11 +124,6 @@ export function KeyframeStrip({ lineIndex }: KeyframeStripProps) {
       const kinds = [...new Set([...coreKinds, ...activeKinds])];
 
       const laneHeight = (height - 14) / kinds.length; // Leave room for labels
-
-      const KIND_SHORT: Record<string, string> = {
-        x: "X", y: "Y", rotation: "R", opacity: "O", speed: "S",
-        scale_x: "SX", scale_y: "SY", color: "C", text: "T", incline: "I",
-      };
 
       for (let ki = 0; ki < kinds.length; ki++) {
         const kind = kinds[ki];

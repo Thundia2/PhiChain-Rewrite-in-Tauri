@@ -8,7 +8,7 @@
 // ============================================================
 
 import { create } from "zustand";
-import type { Beat, LineEvent, LineEventKind, NoteKind, EasingType } from "../types/chart";
+import type { Beat, LineEvent, LineEventKind, NoteKind, EasingType, Note } from "../types/chart";
 import { beatToFloat, floatToBeat, addBeats } from "../types/chart";
 import type {
   EditorGroup,
@@ -46,8 +46,11 @@ export interface GroupState {
   _noteUidMap: Map<string, { lineIndex: number; noteIndex: number }>;
 
   // ---- CRUD ----
+  /** Create a line group. Returns the new group ID. */
   createLineGroup: (name: string, startBeat: Beat, endBeat: Beat) => string;
+  /** Create a note group. Returns the new group ID. */
   createNoteGroup: (name: string, startBeat: Beat, endBeat: Beat) => string;
+  /** Delete a group. Exits group edit mode if the deleted group was active. */
   deleteGroup: (groupId: string) => void;
   renameGroup: (groupId: string, name: string) => void;
   setGroupColor: (groupId: string, color: string) => void;
@@ -55,14 +58,19 @@ export interface GroupState {
   toggleGroupLocked: (groupId: string) => void;
 
   // ---- Membership ----
+  /** Add a line to a line group. Returns false if already a member. */
   addLineToGroup: (groupId: string, lineIndex: number) => boolean;
   removeLineFromGroup: (groupId: string, lineIndex: number) => void;
+  /** Add a note (by UID) to a note group. Returns false if already a member. */
   addNoteToGroup: (groupId: string, noteUid: string, lineIndex: number) => boolean;
   removeNoteFromGroup: (groupId: string, noteUid: string) => void;
 
   // ---- Delay ----
+  /** Set the global delay offset for all members of a group (in beats). */
   setGroupDelay: (groupId: string, delay: number) => void;
+  /** Toggle per-member delay overrides on/off for a group. */
   toggleAdvancedDelay: (groupId: string) => void;
+  /** Set a per-member delay override. Pass undefined to clear the override. */
   setMemberDelayOverride: (
     groupId: string,
     memberType: "line" | "note",
@@ -71,17 +79,21 @@ export interface GroupState {
   ) => void;
 
   // ---- Mode ----
+  /** Enter group edit mode for a specific group. Shows group overlay on canvas. */
   enterGroupEditMode: (groupId: string) => void;
+  /** Exit group edit mode and return to normal editing. */
   exitGroupEditMode: () => void;
   setGroupEditSettings: (settings: Partial<GroupEditSettings>) => void;
 
   // ---- Batch operations: Line groups ----
+  /** Apply X/Y/rotation offset to all lines in the active group at the given beat. Uses per-member delay. */
   applyOffsetToGroup: (
     deltaX: number,
     deltaY: number,
     deltaRotation: number,
     currentBeat: Beat,
   ) => void;
+  /** Add a constant or transition event to all lines in a group. Uses per-member delay offsets. */
   batchAddEventToGroup: (
     groupId: string,
     kind: LineEventKind,
@@ -89,21 +101,39 @@ export interface GroupState {
     endBeat: number,
     value: { constant: number } | { transition: { start: number; end: number; easing: EasingType } },
   ) => void;
+  /** Copy all events of a given kind from a source line to all lines in a group. */
   batchCopyEventsInGroup: (
     groupId: string,
     sourceLineIndex: number,
     kind: LineEventKind,
   ) => void;
+  /** Delete all events of a given kind from all lines in a group. */
   batchDeleteEventsByKindInGroup: (
     groupId: string,
     kind: LineEventKind,
   ) => void;
 
   // ---- Batch operations: Note groups ----
+  /** Shift all notes in a note group by deltaBeat. Respects per-member delay. */
   batchShiftNotesInGroup: (groupId: string, deltaBeat: number) => void;
+  /** Change the kind (tap/drag/flick/hold) of all notes in a note group. */
   batchChangeNoteKindInGroup: (groupId: string, kind: NoteKind) => void;
+  /** Flip above/below for all notes in a note group. */
   batchFlipNotesInGroup: (groupId: string) => void;
+  /** Set the speed multiplier for all notes in a note group. */
   batchChangeNoteSpeedInGroup: (groupId: string, speed: number) => void;
+
+  // ---- Internal helpers ----
+  /** Resolve all note refs in a note group and build per-line mutations. */
+  _buildNoteGroupMutations: (
+    groupId: string,
+    buildChanges: (
+      noteRef: GroupNoteRef,
+      resolved: { lineIndex: number; noteIndex: number },
+      note: Note,
+      index: number,
+    ) => Partial<Note> | null,
+  ) => void;
 
   // ---- Queries ----
   getActiveGroup: () => EditorGroup | null;
@@ -548,7 +578,21 @@ export const useGroupStore = create<GroupState>()((set, get) => ({
 
   // ---- Batch operations: Note groups ----
 
-  batchShiftNotesInGroup: (groupId, deltaBeat) => {
+  /**
+   * Helper: resolve all note refs in a note group, build per-line mutations.
+   * Returns null if group is invalid/locked/wrong type.
+   * buildChanges receives (noteRef, resolved, note, index) and returns
+   * the partial Note changes, or null to skip that note.
+   */
+  _buildNoteGroupMutations: (
+    groupId: string,
+    buildChanges: (
+      noteRef: GroupNoteRef,
+      resolved: { lineIndex: number; noteIndex: number },
+      note: Note,
+      index: number,
+    ) => Partial<Note> | null,
+  ) => {
     const group = get().groups.find((g) => g.id === groupId);
     if (!group || group.locked || group.type !== "note") return;
 
@@ -556,7 +600,7 @@ export const useGroupStore = create<GroupState>()((set, get) => ({
     const store = get();
     const mutations: Array<{
       lineIndex: number;
-      noteEdits: Array<{ noteIndex: number; changes: Partial<import("../types/chart").Note> }>;
+      noteEdits: Array<{ noteIndex: number; changes: Partial<Note> }>;
     }> = [];
 
     for (let i = 0; i < group.notes.length; i++) {
@@ -567,120 +611,46 @@ export const useGroupStore = create<GroupState>()((set, get) => ({
       const note = cs.chart.lines[resolved.lineIndex]?.notes[resolved.noteIndex];
       if (!note) continue;
 
+      const changes = buildChanges(noteRef, resolved, note, i);
+      if (!changes) continue;
+
+      let existing = mutations.find((m) => m.lineIndex === resolved.lineIndex);
+      if (!existing) {
+        existing = { lineIndex: resolved.lineIndex, noteEdits: [] };
+        mutations.push(existing);
+      }
+      existing.noteEdits.push({ noteIndex: resolved.noteIndex, changes });
+    }
+
+    if (mutations.length > 0) {
+      cs.batchMultiLineMutations(mutations);
+    }
+  },
+
+  batchShiftNotesInGroup: (groupId, deltaBeat) => {
+    const group = get().groups.find((g) => g.id === groupId);
+    if (!group || group.type !== "note") return;
+
+    get()._buildNoteGroupMutations(groupId, (noteRef, _resolved, note, i) => {
       const delayBeats = computeMemberDelay(group, i, noteRef.delayOverride);
       const totalDelta = floatToBeat(deltaBeat + delayBeats);
       const newBeat = addBeats(note.beat, totalDelta);
-
-      let existing = mutations.find((m) => m.lineIndex === resolved.lineIndex);
-      if (!existing) {
-        existing = { lineIndex: resolved.lineIndex, noteEdits: [] };
-        mutations.push(existing);
-      }
-      existing.noteEdits.push({
-        noteIndex: resolved.noteIndex,
-        changes: { beat: newBeat },
-      });
-    }
-
-    if (mutations.length > 0) {
-      cs.batchMultiLineMutations(mutations);
-    }
+      return { beat: newBeat };
+    });
   },
 
   batchChangeNoteKindInGroup: (groupId, kind) => {
-    const group = get().groups.find((g) => g.id === groupId);
-    if (!group || group.locked || group.type !== "note") return;
-
-    const cs = useChartStore.getState();
-    const store = get();
-    const mutations: Array<{
-      lineIndex: number;
-      noteEdits: Array<{ noteIndex: number; changes: Partial<import("../types/chart").Note> }>;
-    }> = [];
-
-    for (const noteRef of group.notes) {
-      const resolved = store.resolveNoteRef(noteRef.noteUid);
-      if (!resolved) continue;
-
-      let existing = mutations.find((m) => m.lineIndex === resolved.lineIndex);
-      if (!existing) {
-        existing = { lineIndex: resolved.lineIndex, noteEdits: [] };
-        mutations.push(existing);
-      }
-      existing.noteEdits.push({
-        noteIndex: resolved.noteIndex,
-        changes: { kind },
-      });
-    }
-
-    if (mutations.length > 0) {
-      cs.batchMultiLineMutations(mutations);
-    }
+    get()._buildNoteGroupMutations(groupId, () => ({ kind }));
   },
 
   batchFlipNotesInGroup: (groupId) => {
-    const group = get().groups.find((g) => g.id === groupId);
-    if (!group || group.locked || group.type !== "note") return;
-
-    const cs = useChartStore.getState();
-    const store = get();
-    const mutations: Array<{
-      lineIndex: number;
-      noteEdits: Array<{ noteIndex: number; changes: Partial<import("../types/chart").Note> }>;
-    }> = [];
-
-    for (const noteRef of group.notes) {
-      const resolved = store.resolveNoteRef(noteRef.noteUid);
-      if (!resolved) continue;
-
-      const note = cs.chart.lines[resolved.lineIndex]?.notes[resolved.noteIndex];
-      if (!note) continue;
-
-      let existing = mutations.find((m) => m.lineIndex === resolved.lineIndex);
-      if (!existing) {
-        existing = { lineIndex: resolved.lineIndex, noteEdits: [] };
-        mutations.push(existing);
-      }
-      existing.noteEdits.push({
-        noteIndex: resolved.noteIndex,
-        changes: { above: !note.above },
-      });
-    }
-
-    if (mutations.length > 0) {
-      cs.batchMultiLineMutations(mutations);
-    }
+    get()._buildNoteGroupMutations(groupId, (_noteRef, _resolved, note) => ({
+      above: !note.above,
+    }));
   },
 
   batchChangeNoteSpeedInGroup: (groupId, speed) => {
-    const group = get().groups.find((g) => g.id === groupId);
-    if (!group || group.locked || group.type !== "note") return;
-
-    const cs = useChartStore.getState();
-    const store = get();
-    const mutations: Array<{
-      lineIndex: number;
-      noteEdits: Array<{ noteIndex: number; changes: Partial<import("../types/chart").Note> }>;
-    }> = [];
-
-    for (const noteRef of group.notes) {
-      const resolved = store.resolveNoteRef(noteRef.noteUid);
-      if (!resolved) continue;
-
-      let existing = mutations.find((m) => m.lineIndex === resolved.lineIndex);
-      if (!existing) {
-        existing = { lineIndex: resolved.lineIndex, noteEdits: [] };
-        mutations.push(existing);
-      }
-      existing.noteEdits.push({
-        noteIndex: resolved.noteIndex,
-        changes: { speed },
-      });
-    }
-
-    if (mutations.length > 0) {
-      cs.batchMultiLineMutations(mutations);
-    }
+    get()._buildNoteGroupMutations(groupId, () => ({ speed }));
   },
 
   // ---- Queries ----
@@ -720,6 +690,7 @@ export const useGroupStore = create<GroupState>()((set, get) => ({
 
   getGroupsJson: () => JSON.stringify(get().groups, null, 2),
 
+  // Validates parsed data to reject corrupted project files
   loadGroupsJson: (json) => {
     try {
       const raw = JSON.parse(json);
@@ -727,7 +698,11 @@ export const useGroupStore = create<GroupState>()((set, get) => ({
         console.error("Failed to load groups: expected an array");
         return;
       }
-      const groups = raw.map(migrateGroup);
+      // Filter out invalid entries — each group must be an object with an id and members array
+      const validRaw = raw.filter(
+        (g) => g && typeof g === "object" && typeof g.id === "string" && Array.isArray(g.members)
+      );
+      const groups = validRaw.map(migrateGroup);
       set({ groups });
     } catch (e) {
       console.error("Failed to load groups:", e);

@@ -3,19 +3,27 @@
 //
 // Registers all keyboard shortcuts using react-hotkeys-hook.
 // Call useGlobalHotkeys() once in App.tsx to activate them.
+//
+// Recent change: Delete key now deletes selected bookmarks.
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y now interleave chart and
+// bookmark undo/redo using shared sequence counters.
 // ============================================================
 
+import { useEffect } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useEditorStore } from "../stores/editorStore";
 import { useChartStore } from "../stores/chartStore";
 import { useAudioStore } from "../stores/audioStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useGroupStore } from "../stores/groupStore";
 import { useBookmarkStore } from "../stores/bookmarkStore";
+import { useTabStore } from "../stores/tabStore";
 import { audioEngine } from "../audio/audioEngine";
 import { CANVAS_WIDTH } from "../types/chart";
 import type { BookmarkPreset } from "../types/bookmark";
-import { addBeats, subtractBeats, minimumBeat, snapBeat } from "../utils/beat";
+import { addBeats, subtractBeats, minimumBeat, snapBeat, beatToFloat, floatToBeat } from "../utils/beat";
 import { BpmList } from "../utils/bpmList";
+import { addMarkerAtCurrentBeat, seekToPrevBookmark, seekToNextBookmark } from "../utils/bookmarkNavigation";
 import type { EditorTool } from "../types/editor";
 import { useToastStore } from "../stores/toastStore";
 
@@ -23,6 +31,8 @@ export function useGlobalHotkeys(callbacks: {
   onNewChart?: () => void;
   onCommandPalette?: () => void;
   onImportChart?: () => void;
+  onShowGoToBeat?: () => void;
+  onShowPasteSpecial?: () => void;
 }) {
   // ---- Tool shortcuts ----
   const setTool = (tool: EditorTool) => () => useEditorStore.getState().setTool(tool);
@@ -30,22 +40,30 @@ export function useGlobalHotkeys(callbacks: {
   useHotkeys("v", setTool("select"), { preventDefault: true });
   useHotkeys("x", setTool("eraser"), { preventDefault: true });
 
-  // Q/W/E/R: place markers in mark mode, switch tools otherwise
+  // Q/W/E/R: place markers in mark mode, switch note kind in step record, switch tools otherwise
   useHotkeys("q", () => {
-    if (useEditorStore.getState().improvisationMode) { improvPlace("tap"); return; }
-    useEditorStore.getState().setTool("place_tap");
+    const es = useEditorStore.getState();
+    if (es.improvisationMode) { improvPlace("tap"); return; }
+    if (es.stepRecordActive) { es.setStepRecordNoteKind("tap"); return; }
+    es.setTool("place_tap");
   }, { preventDefault: true });
   useHotkeys("w", () => {
-    if (useEditorStore.getState().improvisationMode) { improvPlace("drag"); return; }
-    useEditorStore.getState().setTool("place_drag");
+    const es = useEditorStore.getState();
+    if (es.improvisationMode) { improvPlace("drag"); return; }
+    if (es.stepRecordActive) { es.setStepRecordNoteKind("drag"); return; }
+    es.setTool("place_drag");
   }, { preventDefault: true });
   useHotkeys("e", () => {
-    if (useEditorStore.getState().improvisationMode) { improvPlace("flick"); return; }
-    useEditorStore.getState().setTool("place_flick");
+    const es = useEditorStore.getState();
+    if (es.improvisationMode) { improvPlace("flick"); return; }
+    if (es.stepRecordActive) { es.setStepRecordNoteKind("flick"); return; }
+    es.setTool("place_flick");
   }, { preventDefault: true });
   useHotkeys("r", () => {
-    if (useEditorStore.getState().improvisationMode) { improvPlace("hold"); return; }
-    useEditorStore.getState().setTool("place_hold");
+    const es = useEditorStore.getState();
+    if (es.improvisationMode) { improvPlace("hold"); return; }
+    if (es.stepRecordActive) { es.setStepRecordNoteKind("hold"); return; }
+    es.setTool("place_hold");
   }, { preventDefault: true });
 
   // ---- Unified Editor panels ----
@@ -71,14 +89,61 @@ export function useGlobalHotkeys(callbacks: {
   // ---- Record mode ----
   useHotkeys("alt+r", () => useEditorStore.getState().toggleRecordMode(), { preventDefault: true });
 
+  // ---- Onset Detection toggle ----
+  useHotkeys("shift+o", () => {
+    const ss = useSettingsStore.getState();
+    ss.updateSettings({ onsetDetectionEnabled: !ss.onsetDetectionEnabled });
+  }, { preventDefault: true });
+
   // ---- Undo / Redo ----
-  useHotkeys("ctrl+z, meta+z", () => useChartStore.getState().undo(), { preventDefault: true });
-  useHotkeys("ctrl+shift+z, meta+shift+z", () => useChartStore.getState().redo(), { preventDefault: true });
+  // Interleaved: compare sequence numbers to decide which store (chart vs bookmark) to undo/redo
+  useHotkeys("ctrl+z, meta+z", () => {
+    const cs = useChartStore.getState();
+    const bs = useBookmarkStore.getState();
+    const es = useEditorStore.getState();
+
+    // Determine which store had the most recent action by comparing top-of-stack sequence numbers
+    const chartTopSeq = cs._pastSeqs.length > 0 ? cs._pastSeqs[cs._pastSeqs.length - 1] : 0;
+    const bmTopSeq = bs._pastSeqs.length > 0 ? bs._pastSeqs[bs._pastSeqs.length - 1] : 0;
+
+    if (bmTopSeq > chartTopSeq && bs.canUndo()) {
+      bs.undo();
+    } else {
+      cs.undo();
+      // If in step record mode, also rewind the beat counter
+      if (es.stepRecordActive && es.stepRecordNotesPlaced > 0) {
+        es.rewindStepBeat();
+      }
+    }
+  }, { preventDefault: true });
+  // Redo — Ctrl+Y added as alias alongside Ctrl+Shift+Z
+  useHotkeys("ctrl+shift+z, meta+shift+z, ctrl+y", () => {
+    const cs = useChartStore.getState();
+    const bs = useBookmarkStore.getState();
+
+    const chartRedoSeq = cs._futureSeqs.length > 0 ? cs._futureSeqs[cs._futureSeqs.length - 1] : 0;
+    const bmRedoSeq = bs._futureSeqs.length > 0 ? bs._futureSeqs[bs._futureSeqs.length - 1] : 0;
+
+    if (bmRedoSeq > chartRedoSeq && bs.canRedo()) {
+      bs.redo();
+    } else {
+      cs.redo();
+    }
+  }, { preventDefault: true });
 
   // ---- Delete selected ----
   useHotkeys("delete, backspace", () => {
     const es = useEditorStore.getState();
     const cs = useChartStore.getState();
+    const bs = useBookmarkStore.getState();
+
+    // Check for selected bookmarks first — they take priority so we don't
+    // accidentally delete a line when the user just wanted to remove markers
+    if (bs.selectedBookmarkIds.length > 0) {
+      bs.deleteSelected();
+      return;
+    }
+
     if (es.selectedLineIndex === null) return;
 
     if (es.selectedNoteIndices.length > 0) {
@@ -221,6 +286,32 @@ export function useGlobalHotkeys(callbacks: {
     audioEngine.togglePlayPause();
   }, { preventDefault: true });
 
+  // ---- Loop region markers ----
+  // [ — set loop start at current playhead beat
+  useHotkeys("[", () => {
+    const as_ = useAudioStore.getState();
+    const cs = useChartStore.getState();
+    if (!cs.isLoaded) return;
+    const bpmList = new BpmList(cs.chart.bpm_list);
+    const currentBeat = bpmList.beatAtFloat(Math.max(0, as_.currentTime - cs.chart.offset));
+    as_.setLoopStart(currentBeat);
+  }, { preventDefault: true });
+
+  // ] — set loop end at current playhead beat
+  useHotkeys("]", () => {
+    const as_ = useAudioStore.getState();
+    const cs = useChartStore.getState();
+    if (!cs.isLoaded) return;
+    const bpmList = new BpmList(cs.chart.bpm_list);
+    const currentBeat = bpmList.beatAtFloat(Math.max(0, as_.currentTime - cs.chart.offset));
+    as_.setLoopEnd(currentBeat);
+  }, { preventDefault: true });
+
+  // \ — toggle loop on/off
+  useHotkeys("\\", () => {
+    useAudioStore.getState().toggleLoop();
+  }, { preventDefault: true });
+
   // ---- Save ----
   useHotkeys("ctrl+s, meta+s", async () => {
     const cs = useChartStore.getState();
@@ -253,6 +344,16 @@ export function useGlobalHotkeys(callbacks: {
     callbacks.onImportChart?.();
   }, { preventDefault: true });
 
+  // ---- Go to Beat dialog ----
+  useHotkeys("ctrl+j, meta+j", () => {
+    callbacks.onShowGoToBeat?.();
+  }, { preventDefault: true });
+
+  // ---- Paste Special dialog ----
+  useHotkeys("ctrl+alt+v, meta+alt+v", () => {
+    callbacks.onShowPasteSpecial?.();
+  }, { preventDefault: true });
+
   // ---- Flip selected notes above/below ----
   useHotkeys("f", () => {
     const es = useEditorStore.getState();
@@ -269,6 +370,87 @@ export function useGlobalHotkeys(callbacks: {
     );
   }, { preventDefault: true });
 
+  // ---- Mirror selected notes horizontally (negate X) ----
+  useHotkeys("m", () => {
+    const es = useEditorStore.getState();
+    const cs = useChartStore.getState();
+    if (es.selectedLineIndex === null || es.selectedNoteIndices.length === 0) return;
+    const line = cs.chart.lines[es.selectedLineIndex];
+    if (!line) return;
+
+    cs.batchEditNotes(es.selectedLineIndex,
+      es.selectedNoteIndices.map((idx) => ({
+        noteIndex: idx,
+        changes: { x: -line.notes[idx].x },
+      })),
+    );
+  }, { preventDefault: true });
+
+  // ---- Quantize selected notes to beat grid ----
+  useHotkeys("ctrl+q, meta+q", () => {
+    const es = useEditorStore.getState();
+    const cs = useChartStore.getState();
+    if (es.selectedLineIndex === null || es.selectedNoteIndices.length === 0) return;
+    const line = cs.chart.lines[es.selectedLineIndex];
+    if (!line) return;
+
+    cs.batchEditNotes(es.selectedLineIndex,
+      es.selectedNoteIndices.map((idx) => ({
+        noteIndex: idx,
+        changes: { beat: snapBeat(beatToFloat(line.notes[idx].beat), es.density) },
+      })),
+    );
+  }, { preventDefault: true });
+
+  // ---- Distribute selected notes evenly in time ----
+  useHotkeys("ctrl+d, meta+d", () => {
+    const es = useEditorStore.getState();
+    const cs = useChartStore.getState();
+    if (es.selectedLineIndex === null || es.selectedNoteIndices.length < 3) return;
+    const line = cs.chart.lines[es.selectedLineIndex];
+    if (!line) return;
+
+    // Sort selected notes by beat to find the range
+    const sorted = [...es.selectedNoteIndices]
+      .map((idx) => ({ idx, beat: beatToFloat(line.notes[idx].beat) }))
+      .sort((a, b) => a.beat - b.beat);
+
+    const firstBeat = sorted[0].beat;
+    const lastBeat = sorted[sorted.length - 1].beat;
+    if (lastBeat <= firstBeat) return; // All at same beat — nothing to distribute
+    const step = (lastBeat - firstBeat) / (sorted.length - 1);
+
+    cs.batchEditNotes(es.selectedLineIndex,
+      sorted.map((entry, i) => ({
+        noteIndex: entry.idx,
+        changes: { beat: floatToBeat(firstBeat + i * step) },
+      })),
+    );
+  }, { preventDefault: true });
+
+  // ---- Strum/stagger selected notes (spread beats by X position order) ----
+  useHotkeys("ctrl+shift+s, meta+shift+s", () => {
+    const es = useEditorStore.getState();
+    const cs = useChartStore.getState();
+    if (es.selectedLineIndex === null || es.selectedNoteIndices.length < 2) return;
+    const line = cs.chart.lines[es.selectedLineIndex];
+    if (!line) return;
+
+    // Sort selected notes by X position (left to right)
+    const sorted = [...es.selectedNoteIndices]
+      .map((idx) => ({ idx, x: line.notes[idx].x, beat: beatToFloat(line.notes[idx].beat) }))
+      .sort((a, b) => a.x - b.x);
+
+    // Apply incremental beat offset: each note gets +i * (1/density) beats
+    const strumStep = 1 / es.density;
+    cs.batchEditNotes(es.selectedLineIndex,
+      sorted.map((entry, i) => ({
+        noteIndex: entry.idx,
+        changes: { beat: floatToBeat(entry.beat + i * strumStep) },
+      })),
+    );
+  }, { preventDefault: true });
+
   // ---- Fit All (Shift+F) — zoom to fit all visible lines ----
   useHotkeys("shift+f", () => {
     useEditorStore.getState().resetCanvasViewport();
@@ -278,6 +460,27 @@ export function useGlobalHotkeys(callbacks: {
   useHotkeys("t", () => {
     useEditorStore.getState().toggleBeatSyncPlacement();
   }, { preventDefault: true, enableOnFormTags: false });
+
+  // ---- Step Record toggle ----
+  useHotkeys("s", () => {
+    useEditorStore.getState().toggleStepRecord();
+  }, { preventDefault: true, enableOnFormTags: false });
+
+  // ---- X Snap toggle ----
+  useHotkeys("shift+x", () => {
+    useEditorStore.getState().toggleXSnap();
+  }, { preventDefault: true });
+
+  // ---- Step size adjustment (only during step recording) ----
+  useHotkeys("shift+up", () => {
+    const es = useEditorStore.getState();
+    if (es.stepRecordActive) es.doubleStepSize();
+  }, { preventDefault: true });
+
+  useHotkeys("shift+down", () => {
+    const es = useEditorStore.getState();
+    if (es.stepRecordActive) es.halveStepSize();
+  }, { preventDefault: true });
 
   // ---- Group editing ----
 
@@ -341,16 +544,33 @@ export function useGlobalHotkeys(callbacks: {
     useEditorStore.getState().setCanvasActivePanel("group-manager");
   }, { preventDefault: true });
 
-  // Escape: Exit group edit mode (when in group mode)
+  // Escape: Exit step record first, then group edit mode, then clear loop
   useHotkeys("escape", () => {
+    const es = useEditorStore.getState();
+    if (es.stepRecordActive) { es.exitStepRecord(); return; }
     const gs = useGroupStore.getState();
-    if (gs.activeGroupId) {
-      gs.exitGroupEditMode();
+    if (gs.activeGroupId) { gs.exitGroupEditMode(); return; }
+    // Clear loop region markers if set
+    const as_ = useAudioStore.getState();
+    if (as_.loopStartBeat !== null || as_.loopEndBeat !== null) {
+      as_.clearLoop();
     }
   }, { preventDefault: false });
 
-  // G: Enter group edit mode for group containing selected line
+  // G: Context-aware — toggle mini preview in unrolled editor, else enter group edit mode
   useHotkeys("g", () => {
+    // Check which tab type is active to decide behavior
+    const activeTab = useTabStore.getState().tabs.find(
+      (t) => t.id === useTabStore.getState().activeTabId
+    );
+
+    // In unrolled editor: toggle mini game preview
+    if (activeTab?.type === "unrolled_editor") {
+      useEditorStore.getState().toggleMiniPreview();
+      return;
+    }
+
+    // Elsewhere: existing group edit mode behavior
     const es = useEditorStore.getState();
     const gs = useGroupStore.getState();
 
@@ -363,6 +583,11 @@ export function useGlobalHotkeys(callbacks: {
       gs.enterGroupEditMode(lineGroups[0].id);
     }
   }, { preventDefault: true, enableOnFormTags: false });
+
+  // Ctrl+Shift+U: Open/focus the unrolled editor tab
+  useHotkeys("ctrl+shift+u, meta+shift+u", () => {
+    useTabStore.getState().openUnrolledEditor();
+  }, { preventDefault: true });
 
   // ---- Mark mode toggle ----
   useHotkeys("shift+i", () => {
@@ -400,4 +625,32 @@ export function useGlobalHotkeys(callbacks: {
   useHotkeys("3", () => {
     if (useEditorStore.getState().improvisationMode) improvPlace("violet");
   }, { preventDefault: false, enableOnFormTags: false });
+
+  // ---- Section marker hotkey (Ctrl+B) — add marker at current beat ----
+  useHotkeys("ctrl+b, meta+b", () => {
+    addMarkerAtCurrentBeat();
+  }, { preventDefault: true });
+
+  // ---- Ctrl+Shift+Scroll for bookmark navigation ----
+  // Uses Ctrl+Shift+wheel to avoid conflicting with Ctrl+wheel (canvas zoom)
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      // Require BOTH Ctrl and Shift to avoid conflict with canvas Ctrl+scroll zoom
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
+      if (!useChartStore.getState().isLoaded) return;
+
+      // Only navigate if there are bookmarks to navigate to
+      const bookmarks = useBookmarkStore.getState().bookmarks;
+      if (!bookmarks || bookmarks.length === 0) return;
+
+      if (e.deltaY < 0) {
+        seekToNextBookmark();
+      } else if (e.deltaY > 0) {
+        seekToPrevBookmark();
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => window.removeEventListener("wheel", handleWheel);
+  }, []);
 }

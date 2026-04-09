@@ -1,6 +1,9 @@
 // ============================================================
 // Game Preview Component
 //
+// Recent change: Added effectiveOffset (chart.offset + audioLatencyMs)
+// to shift game preview visuals for audio latency compensation.
+//
 // A live canvas preview of the chart. Reads from all stores
 // and renders each frame using the GameRenderer.
 //
@@ -11,7 +14,7 @@
 //   - Passes selection, FC/AP, multi-highlight, HUD options
 // ============================================================
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useMemo } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { useEditorStore } from "../../stores/editorStore";
@@ -38,20 +41,19 @@ export function GamePreview() {
   const textureUrlsRef = useRef<Map<string, string>>(new Map());
   const rafRef = useRef<number>(0);
   const wasPlayingRef = useRef(false);
+  // Tracks the raw bpm_list reference to detect changes inside the render loop
+  const bpmListDataRef = useRef<unknown>(null);
 
   const chart = useChartStore((s) => s.chart);
   const isLoaded = useChartStore((s) => s.isLoaded);
 
   // Build BpmList (memoized on bpm_list reference)
+  const bpmList = useMemo(() => new BpmList(chart.bpm_list), [chart.bpm_list]);
   const bpmListRef = useRef<BpmList | null>(null);
-  const bpmListDataRef = useRef(chart.bpm_list);
-  if (bpmListDataRef.current !== chart.bpm_list) {
-    bpmListDataRef.current = chart.bpm_list;
-    bpmListRef.current = new BpmList(chart.bpm_list);
+  if (bpmListRef.current == null) {
+    bpmListRef.current = bpmList;
   }
-  if (!bpmListRef.current) {
-    bpmListRef.current = new BpmList(chart.bpm_list);
-  }
+  useEffect(() => { bpmListRef.current = bpmList; }, [bpmList]);
 
   // ---- Canvas sizing ----
   const resizeCanvas = useCallback(() => {
@@ -105,18 +107,25 @@ export function GamePreview() {
       observer.observe(container);
     }
 
+    // Capture ref values for cleanup (they may change before cleanup runs)
+    const postProcess = postProcessRef.current;
+    const videoBackground = videoBackgroundRef.current;
+    const hitSound = hitSoundRef.current;
+    const textureUrls = textureUrlsRef.current;
+    const loadedTextures = loadedTexturesRef.current;
+
     return () => {
       observer?.disconnect();
       cancelAnimationFrame(rafRef.current);
-      postProcessRef.current.dispose();
-      videoBackgroundRef.current.unload();
-      hitSoundRef.current.dispose();
+      postProcess.dispose();
+      videoBackground.unload();
+      hitSound.dispose();
       // Revoke texture object URLs
-      for (const url of textureUrlsRef.current.values()) {
+      for (const url of textureUrls.values()) {
         URL.revokeObjectURL(url);
       }
-      textureUrlsRef.current.clear();
-      loadedTexturesRef.current.clear();
+      textureUrls.clear();
+      loadedTextures.clear();
     };
   }, [resizeCanvas]);
 
@@ -211,8 +220,12 @@ export function GamePreview() {
       }
       const bpmList = bpmListRef.current!;
 
+      // Audio latency compensation: shift game preview visuals so notes
+      // align with what the user actually hears through their hardware.
+      const effectiveOffset = cs.chart.offset + ss.audioLatencyMs / 1000;
+
       // Compute current beat for shader effects
-      const currentBeat = bpmList.beatAtFloat(latestTime - cs.chart.offset);
+      const currentBeat = bpmList.beatAtFloat(latestTime - effectiveOffset);
 
       // Draw video background if configured
       const extraConfig = cs.extraConfig;
@@ -220,7 +233,7 @@ export function GamePreview() {
         const ctx2d = canvas.getContext("2d");
         if (ctx2d) {
           const dpr = window.devicePixelRatio || 1;
-          videoBackgroundRef.current.sync(currentBeat, latestTime - cs.chart.offset, isPlaying);
+          videoBackgroundRef.current.sync(currentBeat, latestTime - effectiveOffset, isPlaying);
           videoBackgroundRef.current.draw(ctx2d, rect.width * dpr, rect.height * dpr, currentBeat);
         }
       }
@@ -229,7 +242,7 @@ export function GamePreview() {
         cs.chart.lines,
         bpmList,
         latestTime,
-        cs.chart.offset,
+        effectiveOffset,
         rect.width,
         rect.height,
         {
@@ -291,7 +304,9 @@ export function GamePreview() {
     const bpmList = bpmListRef.current;
     if (!bpmList) return;
 
-    const currentBeat = bpmList.beatAtFloat(currentTime - cs.chart.offset);
+    // Use effectiveOffset so click-to-select matches the latency-shifted visuals
+    const effectiveOffset = cs.chart.offset + useSettingsStore.getState().audioLatencyMs / 1000;
+    const currentBeat = bpmList.beatAtFloat(currentTime - effectiveOffset);
     const hitIndex = renderer.hitTestLine(
       cs.chart.lines, currentBeat, clickX, clickY, rect.width, rect.height,
     );

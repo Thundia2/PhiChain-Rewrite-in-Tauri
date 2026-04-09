@@ -100,11 +100,14 @@ export function EventPreview({ lineIndex }: EventPreviewProps) {
       const showNotes = es.eventEditorShowNotes;
       const lines = showAllLines ? cs.chart.lines : [cs.chart.lines[lineIndex]].filter(Boolean);
 
+      // Audio latency compensation for game preview visuals
+      const effectiveOffset = cs.chart.offset + ss.audioLatencyMs / 1000;
+
       renderer.render(
         lines,
         bpmList,
         currentTime,
-        cs.chart.offset,
+        effectiveOffset,
         rect.width,
         rect.height,
         {

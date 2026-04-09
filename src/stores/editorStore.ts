@@ -7,11 +7,16 @@
 // Usage:
 //   const tool = useEditorStore(s => s.activeTool);
 //   const selectLine = useEditorStore(s => s.selectLine);
+//
+// Recent change: Added onset detection volatile state — onsetMarkers
+// array and onsetAnalyzing flag for spectral flux onset detection.
 // ============================================================
 
 import { create } from "zustand";
 import type { EditorTool, NoteSideFilter, LineSortMode, PanelId } from "../types/editor";
 import type { Beat, NoteKind, LineEventKind } from "../types/chart";
+import { beatToFloat } from "../types/chart";
+import { snapBeat } from "../utils/beat";
 
 export interface DragSelectionRect {
   x1: number; y1: number;
@@ -77,6 +82,9 @@ export interface EditorState {
   // ---- Beat-sync placement ----
   beatSyncPlacement: boolean;
 
+  // ---- X Snap Grid ----
+  xSnapEnabled: boolean; // When true, note placement snaps to lane boundaries
+
   // ---- Improvisation mode ----
   improvisationMode: boolean;
 
@@ -114,6 +122,23 @@ export interface EditorState {
     y?: number;
     rotation?: number;
   }>;
+
+  // ---- Step Recording Mode ----
+  stepRecordActive: boolean;
+  stepRecordCurrentBeat: number;  // Float beat that auto-advances
+  stepRecordNoteKind: NoteKind;   // What type of note to place (default: tap)
+  stepRecordStepSize: number;     // Beats per step — independent of density
+  stepRecordNotesPlaced: number;  // Counter for status display
+  stepRecordMouseDown: boolean;   // True while mouse button is held (for hold-to-stream)
+  stepRecordLastSnapX: number | null; // Last snap X where a note was placed during drag
+
+  // ---- Unrolled Canvas state ----
+  unrolledScrollBeat: number;          // Beat at the bottom of the viewport (default 0)
+  showMiniPreview: boolean;            // Show the mini game preview inset (default true)
+
+  // ---- Per-line unrolled editor tab state ----
+  lineTabScrollBeats: Record<number, number>;     // lineIndex -> scrollBeat for per-line tabs
+  unrolledFollowPlayback: Record<string, boolean>; // tabKey -> follow flag ("main" or lineIndex string)
 
   // ---- Unified Canvas state ----
   canvasInteractionMode:
@@ -156,19 +181,44 @@ export interface EditorState {
     targetType: "note" | "event" | "multi_note" | "multi_event";
   } | null;
 
-  // ---- Pattern tool ghost notes ----
+  // ---- Onset Detection (volatile per-session state) ----
+  /** Detected onset markers converted to beat positions (null = not yet analyzed) */
+  onsetMarkers: { beat: number; strength: number }[] | null;
+  /** Whether onset analysis is currently running */
+  onsetAnalyzing: boolean;
+
+  // ---- DevTools ----
+  devToolsOpen: boolean;
+
+  // ---- Validation ----
+  validationIssues: Array<{ severity: string; message: string; lineIndex?: number; noteIndex?: number; eventIndex?: number }>;
+
+  // ---- Pattern tool ghost notes + config ----
   patternGhostNotes: Array<{ x: number; beat: number; kind: string; above: boolean }>;
   setPatternGhostNotes: (notes: Array<{ x: number; beat: number; kind: string; above: boolean }>) => void;
+  patternConfig: {
+    shape: string; noteCount: number; startX: number; endX: number;
+    noteKind: string; above: boolean; cycles: number; amplitude: number;
+    stairWidth: number; arcHeight: number; expression: string;
+  };
+  setPatternConfig: (config: Partial<EditorState["patternConfig"]>) => void;
 
   // ---- Selection actions ----
+  /** Select a line by index. Clears note/event selection. Pass null to deselect. */
   selectLine: (index: number | null) => void;
+  /** Replace the note selection with the given indices. */
   setNoteSelection: (indices: number[]) => void;
+  /** Toggle a note index in/out of the current selection. */
   toggleNoteSelection: (index: number) => void;
+  /** Replace the event selection with the given indices. Switches panel to EventMode. */
   setEventSelection: (indices: number[]) => void;
+  /** Toggle an event index in/out of the current selection. */
   toggleEventSelection: (index: number) => void;
+  /** Clear all note and event selections. */
   clearSelection: () => void;
 
   // ---- Tool actions ----
+  /** Set the active editor tool. Clears pending note and pattern ghosts. */
   setTool: (tool: EditorTool) => void;
 
   // ---- Timeline actions ----
@@ -209,6 +259,9 @@ export interface EditorState {
   // ---- Beat-sync placement actions ----
   toggleBeatSyncPlacement: () => void;
 
+  // ---- X Snap actions ----
+  toggleXSnap: () => void;
+
   // ---- Improvisation mode actions ----
   toggleImprovisationMode: () => void;
 
@@ -229,10 +282,44 @@ export interface EditorState {
   setCurveEditorDragState: (state: EditorState["curveEditorDragState"]) => void;
 
   // ---- Record Mode actions ----
+  /** Toggle record mode. When active, line drags during playback capture keyframes. */
   toggleRecordMode: () => void;
+  /** Set which channels (x, y, rotation) are recorded during record mode. */
   setRecordModeChannels: (channels: Partial<EditorState["recordModeChannels"]>) => void;
+  /** Append a keyframe captured during record-mode playback. */
   addRecordedKeyframe: (kf: { beat: number; x?: number; y?: number; rotation?: number }) => void;
+  /** Discard all recorded keyframes without committing them. */
   clearRecordedKeyframes: () => void;
+
+  // ---- Step Recording actions ----
+  /** Toggle step recording mode. Initializes stepBeat from audio position on enter. */
+  toggleStepRecord: () => void;
+  /** Exit step recording mode and clear step state. */
+  exitStepRecord: () => void;
+  /** Set which note kind is placed during step recording. */
+  setStepRecordNoteKind: (kind: NoteKind) => void;
+  /** Set the beat step size (denominator). Affects advanceStepBeat/rewindStepBeat. */
+  setStepRecordStepSize: (size: number) => void;
+  /** Halve the step size (e.g. 1/4 -> 1/8). Clamped to min 1/64. */
+  halveStepSize: () => void;
+  /** Double the step size (e.g. 1/8 -> 1/4). Clamped to max 4. */
+  doubleStepSize: () => void;
+  /** Move the step cursor forward by one step size. */
+  advanceStepBeat: () => void;
+  /** Move the step cursor backward by one step size. */
+  rewindStepBeat: () => void;
+  setStepRecordMouseDown: (down: boolean) => void;
+  setStepRecordLastSnapX: (x: number | null) => void;
+
+  // ---- Unrolled Canvas actions ----
+  setUnrolledScrollBeat: (beat: number) => void;
+  toggleMiniPreview: () => void;
+
+  // ---- Per-line unrolled tab actions ----
+  setLineTabScrollBeat: (lineIndex: number, beat: number) => void;
+  clearLineTabScrollBeat: (lineIndex: number) => void;
+  setUnrolledFollowPlayback: (tabKey: string, follow: boolean) => void;
+  clearUnrolledFollowPlayback: (tabKey: string) => void;
 
   // ---- Unified Canvas actions ----
   setCanvasInteractionMode: (mode: EditorState["canvasInteractionMode"]) => void;
@@ -252,6 +339,16 @@ export interface EditorState {
   showFloatingInspector: (screenX: number, screenY: number,
     targetType: "note" | "event" | "multi_note" | "multi_event") => void;
   hideFloatingInspector: () => void;
+
+  // ---- Onset Detection actions ----
+  setOnsetMarkers: (markers: { beat: number; strength: number }[] | null) => void;
+  setOnsetAnalyzing: (analyzing: boolean) => void;
+
+  // ---- DevTools actions ----
+  toggleDevTools: () => void;
+
+  // ---- Validation actions ----
+  setValidationIssues: (issues: EditorState["validationIssues"]) => void;
 
   // ---- LineStrip filter actions ----
   setLineStripSearch: (query: string) => void;
@@ -295,6 +392,9 @@ export const useEditorStore = create<EditorState>()((set) => ({
   // ---- Beat-sync placement ----
   beatSyncPlacement: false,
 
+  // ---- X Snap Grid ----
+  xSnapEnabled: false,
+
   // ---- Improvisation mode ----
   improvisationMode: false,
 
@@ -316,6 +416,15 @@ export const useEditorStore = create<EditorState>()((set) => ({
   recordModeChannels: { x: true, y: true, rotation: false },
   recordedKeyframes: [],
 
+  // ---- Step Recording ----
+  stepRecordActive: false,
+  stepRecordCurrentBeat: 0,
+  stepRecordNoteKind: "tap" as NoteKind,
+  stepRecordStepSize: 0.25,
+  stepRecordNotesPlaced: 0,
+  stepRecordMouseDown: false,
+  stepRecordLastSnapX: null,
+
   // ---- Timeline overlay ----
   timelineOverlayLines: [],
   timelineOverlayEnabled: false,
@@ -324,13 +433,36 @@ export const useEditorStore = create<EditorState>()((set) => ({
   // ---- Floating inspector ----
   floatingInspector: null,
 
-  // ---- Pattern tool ghost notes ----
+  // ---- Onset Detection ----
+  onsetMarkers: null,
+  onsetAnalyzing: false,
+
+  // ---- DevTools ----
+  devToolsOpen: false,
+
+  // ---- Validation ----
+  validationIssues: [],
+
+  // ---- Pattern tool ghost notes + config ----
   patternGhostNotes: [],
+  patternConfig: {
+    shape: "linear", noteCount: 16, startX: -300, endX: 300,
+    noteKind: "drag", above: true, cycles: 2, amplitude: 300,
+    stairWidth: 4, arcHeight: 200, expression: "300*sin(2*pi*t)",
+  },
 
   // ---- LineStrip filter ----
   lineStripSearchQuery: "",
   lineStripSearchOpen: false,
   lineStripCategoryFilter: null,
+
+  // ---- Unrolled Canvas ----
+  unrolledScrollBeat: 0,
+  showMiniPreview: true,
+
+  // ---- Per-line unrolled tab ----
+  lineTabScrollBeats: {},
+  unrolledFollowPlayback: {},
 
   // ---- Unified Canvas ----
   canvasInteractionMode: "idle",
@@ -448,6 +580,9 @@ export const useEditorStore = create<EditorState>()((set) => ({
   // ---- Beat-sync placement ----
   toggleBeatSyncPlacement: () => set((s) => ({ beatSyncPlacement: !s.beatSyncPlacement })),
 
+  // ---- X Snap Grid ----
+  toggleXSnap: () => set((s) => ({ xSnapEnabled: !s.xSnapEnabled })),
+
   // ---- Improvisation mode ----
   toggleImprovisationMode: () => set((s) => ({
     improvisationMode: !s.improvisationMode,
@@ -489,6 +624,75 @@ export const useEditorStore = create<EditorState>()((set) => ({
   addRecordedKeyframe: (kf) => set((s) => ({ recordedKeyframes: [...s.recordedKeyframes, kf] })),
   clearRecordedKeyframes: () => set({ recordedKeyframes: [], recordMode: false }),
 
+  // ---- Step Recording ----
+  toggleStepRecord: () => set((s) => {
+    if (s.stepRecordActive) {
+      // Deactivating — reset
+      return { stepRecordActive: false, stepRecordNotesPlaced: 0 };
+    }
+    // Activating — set current beat from playhead position.
+    // Import audio/chart stores lazily to avoid circular dependency issues
+    // at module load time. These stores exist at runtime.
+    const { useAudioStore } = require("./audioStore");
+    const { useChartStore, getCachedBpmList } = require("./chartStore");
+    const as_ = useAudioStore.getState();
+    const cs = useChartStore.getState();
+    const bpmList = getCachedBpmList();
+    const currentBeat = bpmList.beatAtFloat(as_.currentTime - cs.chart.offset);
+    const snapped = beatToFloat(snapBeat(currentBeat, s.density));
+    return {
+      stepRecordActive: true,
+      stepRecordCurrentBeat: snapped,
+      stepRecordStepSize: 1 / s.density,
+      stepRecordNotesPlaced: 0,
+      // Inherit current tool's note kind, default to tap
+      stepRecordNoteKind: (s.activeTool.startsWith("place_")
+        ? s.activeTool.replace("place_", "") as NoteKind
+        : "tap"),
+    };
+  }),
+
+  exitStepRecord: () => set({
+    stepRecordActive: false,
+    stepRecordNotesPlaced: 0,
+    stepRecordMouseDown: false,
+    stepRecordLastSnapX: null,
+  }),
+
+  setStepRecordNoteKind: (kind) => set({ stepRecordNoteKind: kind }),
+
+  setStepRecordStepSize: (size) => set({
+    stepRecordStepSize: Math.max(1 / 32, Math.min(4, size)),
+  }),
+
+  // Halve step size (e.g., 1/4 → 1/8). Floors at 1/32.
+  halveStepSize: () => set((s) => ({
+    stepRecordStepSize: Math.max(1 / 32, s.stepRecordStepSize / 2),
+  })),
+
+  // Double step size (e.g., 1/8 → 1/4). Caps at 4.
+  doubleStepSize: () => set((s) => ({
+    stepRecordStepSize: Math.min(4, s.stepRecordStepSize * 2),
+  })),
+
+  advanceStepBeat: () => set((s) => ({
+    stepRecordCurrentBeat: s.stepRecordCurrentBeat + s.stepRecordStepSize,
+    stepRecordNotesPlaced: s.stepRecordNotesPlaced + 1,
+  })),
+
+  rewindStepBeat: () => set((s) => ({
+    stepRecordCurrentBeat: Math.max(0, s.stepRecordCurrentBeat - s.stepRecordStepSize),
+    stepRecordNotesPlaced: Math.max(0, s.stepRecordNotesPlaced - 1),
+  })),
+
+  setStepRecordMouseDown: (down) => set({
+    stepRecordMouseDown: down,
+    // Reset last snap X when mouse is released
+    ...(down ? {} : { stepRecordLastSnapX: null }),
+  }),
+
+  setStepRecordLastSnapX: (x) => set({ stepRecordLastSnapX: x }),
+
   // ---- Timeline overlay ----
   setTimelineOverlayLines: (indices) => set({ timelineOverlayLines: indices }),
   toggleTimelineOverlayLine: (index) => set((s) => {
@@ -506,7 +710,19 @@ export const useEditorStore = create<EditorState>()((set) => ({
     floatingInspector: { screenX, screenY, targetType },
   }),
   hideFloatingInspector: () => set({ floatingInspector: null }),
+
+  // ---- Onset Detection ----
+  setOnsetMarkers: (markers) => set({ onsetMarkers: markers }),
+  setOnsetAnalyzing: (analyzing) => set({ onsetAnalyzing: analyzing }),
+
+  // ---- DevTools ----
+  toggleDevTools: () => set((s) => ({ devToolsOpen: !s.devToolsOpen })),
+
+  // ---- Validation ----
+  setValidationIssues: (issues) => set({ validationIssues: issues }),
+
   setPatternGhostNotes: (notes) => set({ patternGhostNotes: notes }),
+  setPatternConfig: (config) => set((s) => ({ patternConfig: { ...s.patternConfig, ...config } })),
 
   // ---- LineStrip filter ----
   setLineStripSearch: (query) => set({ lineStripSearchQuery: query }),
@@ -526,6 +742,26 @@ export const useEditorStore = create<EditorState>()((set) => ({
       return { lineStripCategoryFilter: next.length === 0 ? null : next };
     }
     return { lineStripCategoryFilter: [...current, category] };
+  }),
+
+  // ---- Unrolled Canvas ----
+  setUnrolledScrollBeat: (beat) => set({ unrolledScrollBeat: Math.max(0, beat) }),
+  toggleMiniPreview: () => set((s) => ({ showMiniPreview: !s.showMiniPreview })),
+
+  // ---- Per-line unrolled tab ----
+  setLineTabScrollBeat: (lineIndex, beat) => set((s) => ({
+    lineTabScrollBeats: { ...s.lineTabScrollBeats, [lineIndex]: Math.max(0, beat) },
+  })),
+  clearLineTabScrollBeat: (lineIndex) => set((s) => {
+    const { [lineIndex]: _, ...rest } = s.lineTabScrollBeats;
+    return { lineTabScrollBeats: rest };
+  }),
+  setUnrolledFollowPlayback: (tabKey, follow) => set((s) => ({
+    unrolledFollowPlayback: { ...s.unrolledFollowPlayback, [tabKey]: follow },
+  })),
+  clearUnrolledFollowPlayback: (tabKey) => set((s) => {
+    const { [tabKey]: _, ...rest } = s.unrolledFollowPlayback;
+    return { unrolledFollowPlayback: rest };
   }),
 
   // ---- Unified Canvas ----
@@ -551,3 +787,20 @@ export const useEditorStore = create<EditorState>()((set) => ({
   toggleKeyframeBar: () => set((s) => ({ keyframeBarOpen: !s.keyframeBarOpen })),
   setKeyframeBarHeight: (height) => set({ keyframeBarHeight: Math.max(50, Math.min(200, height)) }),
 }));
+
+// ============================================================
+// Narrow selector hooks
+//
+// Return primitive values for Record-typed state, avoiding
+// unnecessary re-renders when unrelated keys change.
+// ============================================================
+
+/** Get scroll beat for a specific line tab (returns primitive — won't re-render on other lines). */
+export function useLineTabScrollBeat(lineIndex: number): number {
+  return useEditorStore((s) => s.lineTabScrollBeats[lineIndex] ?? 0);
+}
+
+/** Get follow-playback flag for a specific unrolled tab (returns primitive). */
+export function useUnrolledFollowPlayback(tabKey: string): boolean {
+  return useEditorStore((s) => s.unrolledFollowPlayback[tabKey] ?? true);
+}

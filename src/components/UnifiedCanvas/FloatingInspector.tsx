@@ -8,12 +8,12 @@
 // Dismissal: Escape, click outside, tool change, playback start.
 // ============================================================
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { useEditorStore } from "../../stores/editorStore";
 import { useChartStore } from "../../stores/chartStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { Field, SelectField, safeParseNumber } from "../common/FormFields";
-import type { NoteKind } from "../../types/chart";
+import type { NoteKind, Line } from "../../types/chart";
 
 const NOTE_KIND_OPTIONS = [
   { value: "tap", label: "Tap" },
@@ -134,10 +134,10 @@ function SingleNoteInspector({
   noteIndex,
   editNote,
 }: {
-  line: any;
+  line: Line;
   lineIndex: number;
   noteIndex: number;
-  editNote: (lineIndex: number, noteIndex: number, changes: any) => void;
+  editNote: (lineIndex: number, noteIndex: number, changes: Record<string, unknown>) => void;
 }) {
   const note = line.notes[noteIndex];
   if (!note) return null;
@@ -152,7 +152,7 @@ function SingleNoteInspector({
         value={note.kind}
         options={NOTE_KIND_OPTIONS}
         onChange={(v) => {
-          const changes: any = { kind: v as NoteKind };
+          const changes: Record<string, unknown> = { kind: v as NoteKind };
           if (v === "hold" && !note.hold_beat) {
             changes.hold_beat = [1, 0, 1];
           }
@@ -195,8 +195,8 @@ function MultiNoteInspector({
   noteCount: number;
   lineIndex: number;
   noteIndices: number[];
-  editNotes: (lineIndex: number, noteIndices: number[], changes: any) => void;
-  line: any;
+  editNotes: (lineIndex: number, noteIndices: number[], changes: Record<string, unknown>) => void;
+  line: Line;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -234,31 +234,33 @@ function SingleEventInspector({
   eventIndex,
   editEvent,
 }: {
-  line: any;
+  line: Line;
   lineIndex: number;
   eventIndex: number;
-  editEvent: (lineIndex: number, eventIndex: number, changes: any) => void;
+  editEvent: (lineIndex: number, eventIndex: number, changes: Record<string, unknown>) => void;
 }) {
   const event = line.events[eventIndex];
   if (!event) return null;
 
-  const isTransition = event.value && "transition" in event.value;
+  // Extract typed transition/constant values for type-safe JSX access
+  const transValue = event.value && "transition" in event.value ? event.value.transition : null;
+  const constValue = event.value && "constant" in event.value ? event.value.constant : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ fontSize: 11, fontWeight: "bold", color: "var(--text-primary)", marginBottom: 2 }}>
         {event.kind} event
       </div>
-      {isTransition ? (
+      {transValue ? (
         <>
           <Field
             label="Start"
-            value={event.value.transition.start}
+            value={transValue.start}
             onChange={(v) => {
               const n = safeParseNumber(v);
               if (n !== null) {
                 editEvent(lineIndex, eventIndex, {
-                  value: { transition: { ...event.value.transition, start: n } },
+                  value: { transition: { ...transValue, start: n } },
                 });
               }
             }}
@@ -266,12 +268,12 @@ function SingleEventInspector({
           />
           <Field
             label="End"
-            value={event.value.transition.end}
+            value={transValue.end}
             onChange={(v) => {
               const n = safeParseNumber(v);
               if (n !== null) {
                 editEvent(lineIndex, eventIndex, {
-                  value: { transition: { ...event.value.transition, end: n } },
+                  value: { transition: { ...transValue, end: n } },
                 });
               }
             }}
@@ -281,7 +283,7 @@ function SingleEventInspector({
       ) : (
         <Field
           label="Value"
-          value={event.value?.constant ?? 0}
+          value={constValue ?? 0}
           onChange={(v) => {
             const n = safeParseNumber(v);
             if (n !== null) {

@@ -10,7 +10,6 @@ import type { MosaicNode } from "react-mosaic-component";
 import "react-mosaic-component/react-mosaic-component.css";
 
 import type { PanelId } from "./types/editor";
-import { PANEL_TIERS } from "./types/editor";
 import { useChartStore } from "./stores/chartStore";
 import { useTabStore } from "./stores/tabStore";
 import {
@@ -42,20 +41,35 @@ import { SettingsModal } from "./components/SettingsModal/SettingsModal";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { LineEventEditor } from "./components/LineEventEditor/LineEventEditor";
 import { UnifiedEditorTab } from "./components/UnifiedCanvas/UnifiedEditorTab";
+import { UnrolledEditorTab } from "./components/UnrolledCanvas/UnrolledEditorTab";
 import { ValidationPanel } from "./components/Validation/ValidationPanel";
 import { EffectsEditor } from "./components/EffectsEditor/EffectsEditor";
 import { PresetPanel } from "./components/PresetPanel/PresetPanel";
 import { ParametricDialog } from "./components/ParametricDialog/ParametricDialog";
 import { NotePatternDialog } from "./components/NotePatternDialog/NotePatternDialog";
 import { SpinGeneratorDialog } from "./components/SpinGeneratorDialog/SpinGeneratorDialog";
+import { ShakeGeneratorDialog } from "./components/ShakeGenerator/ShakeGenerator";
 import { BatchLineDialog } from "./components/BatchLineDialog/BatchLineDialog";
 import { LyricsSyncDialog } from "./components/LyricsSyncDialog/LyricsSyncDialog";
+import { PasteSpecialDialog } from "./components/PasteSpecialDialog/PasteSpecialDialog";
+import { GoToBeatDialog } from "./components/GoToBeatDialog/GoToBeatDialog";
+import { ExportDiffDialog } from "./components/ExportDiffDialog/ExportDiffDialog";
+import { SelectiveExportDialog } from "./components/SelectiveExportDialog/SelectiveExportDialog";
+import { RecordReviewDialog } from "./components/RecordReviewDialog/RecordReviewDialog";
+import { CalibrationDialog } from "./components/CalibrationDialog/CalibrationDialog";
+import { ContextPanelSidebar } from "./components/ContextPanel/ContextPanelSidebar";
+import { FavoritesWizard } from "./components/ContextPanel/wizard/FavoritesWizard";
 import { useEditorStore } from "./stores/editorStore";
+import { useAudioStore } from "./stores/audioStore";
+import { useDialogStore } from "./stores/dialogStore";
+import { audioEngine } from "./audio/audioEngine";
 import { useGlobalHotkeys } from "./hooks/useHotkeys";
+import { useOnsetDetection } from "./hooks/useOnsetDetection";
 import { useClipboard } from "./hooks/useClipboard";
 import { triggerImportChart } from "./utils/importChart";
 import { ToastContainer } from "./components/common/Toast";
 import { ConfirmDialog } from "./components/common/ConfirmDialog";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
 // ============================================================
 // CONFIGURABLE: Default panel layout
@@ -108,32 +122,46 @@ const PANEL_TITLES: Record<PanelId, string> = {
 };
 
 function renderPanel(id: PanelId) {
+  const title = PANEL_TITLES[id] ?? id;
+  let content;
   switch (id) {
     case "game-preview":
-      return <GamePreview />;
+      content = <GamePreview />;
+      break;
     case "timeline":
-      return <Timeline />;
+      content = <Timeline />;
+      break;
     case "inspector":
-      return <Inspector />;
+      content = <Inspector />;
+      break;
     case "line-list":
-      return <LineList />;
+      content = <LineList />;
+      break;
     case "toolbar":
-      return <Toolbar />;
+      content = <Toolbar />;
+      break;
     case "timeline-settings":
-      return <TimelineSettings />;
+      content = <TimelineSettings />;
+      break;
     case "bpm-list":
-      return <BpmListPanel />;
+      content = <BpmListPanel />;
+      break;
     case "chart-settings":
-      return <ChartSettings />;
+      content = <ChartSettings />;
+      break;
     case "validation":
-      return <ValidationPanel />;
+      content = <ValidationPanel />;
+      break;
     case "effects":
-      return <EffectsEditor />;
+      content = <EffectsEditor />;
+      break;
     case "presets":
-      return <PresetPanel />;
+      content = <PresetPanel />;
+      break;
     default:
-      return <PanelPlaceholder name={PANEL_TITLES[id]} description="Coming soon" color="var(--text-muted)" />;
+      return <PanelPlaceholder name={title} description="Coming soon" color="var(--text-muted)" />;
   }
+  return <ErrorBoundary panelName={title}>{content}</ErrorBoundary>;
 }
 
 /** Render a standalone panel tab based on its panelId */
@@ -176,14 +204,23 @@ function renderPanelTab(panelId: string) {
  */
 export default function App() {
   const [layout, setLayout] = useState<MosaicNode<PanelId> | null>(DEFAULT_LAYOUT);
-  const [showNewProject, setShowNewProject] = useState(false);
-  const [showParametric, setShowParametric] = useState(false);
-  const [showBatchLine, setShowBatchLine] = useState(false);
-  const [showLyricsSync, setShowLyricsSync] = useState(false);
-  const [showNotePattern, setShowNotePattern] = useState(false);
-  const [showSpinGenerator, setShowSpinGenerator] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  // Dialog state managed via dialogStore (eliminates prop drilling)
+  const { openDialog, closeDialog, toggleDialog } = useDialogStore();
+  const showNewProject = useDialogStore((s) => s.openDialogs.has("new-project"));
+  const showParametric = useDialogStore((s) => s.openDialogs.has("parametric"));
+  const showBatchLine = useDialogStore((s) => s.openDialogs.has("batch-line"));
+  const showLyricsSync = useDialogStore((s) => s.openDialogs.has("lyrics-sync"));
+  const showNotePattern = useDialogStore((s) => s.openDialogs.has("note-pattern"));
+  const showSpinGenerator = useDialogStore((s) => s.openDialogs.has("spin-generator"));
+  const showShakeGenerator = useDialogStore((s) => s.openDialogs.has("shake-generator"));
+  const showPasteSpecial = useDialogStore((s) => s.openDialogs.has("paste-special"));
+  const showGoToBeat = useDialogStore((s) => s.openDialogs.has("go-to-beat"));
+  const showExportDiff = useDialogStore((s) => s.openDialogs.has("export-diff"));
+  const showSelectiveExport = useDialogStore((s) => s.openDialogs.has("selective-export"));
+  const showRecordReview = useDialogStore((s) => s.openDialogs.has("record-review"));
+  const showOnsetCalibration = useDialogStore((s) => s.openDialogs.has("onset-calibration"));
+  const showSettings = useDialogStore((s) => s.openDialogs.has("settings"));
+  const showCommandPalette = useDialogStore((s) => s.openDialogs.has("command-palette"));
   const [expandedPanelId, setExpandedPanelId] = useState<PanelId | null>(null);
   const savedLayoutRef = useRef<MosaicNode<PanelId> | null>(null);
   const prevTabIdRef = useRef<string | null>(null);
@@ -196,11 +233,14 @@ export default function App() {
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
 
   useGlobalHotkeys({
-    onNewChart: () => setShowNewProject(true),
-    onCommandPalette: () => setShowCommandPalette((prev) => !prev),
+    onNewChart: () => openDialog("new-project"),
+    onCommandPalette: () => toggleDialog("command-palette"),
     onImportChart: triggerImportChart,
+    onShowGoToBeat: () => openDialog("go-to-beat"),
+    onShowPasteSpecial: () => openDialog("paste-special"),
   });
   useClipboard();
+  useOnsetDetection();
 
   // ---- Multi-chart session management ----
   // When the active tab changes, save the old chart's state and restore
@@ -219,16 +259,16 @@ export default function App() {
     // If an entry point already saved the session, skip the automatic save
     if (shouldSkipSave()) {
       // Flag consumed — fall through to restore only
-    } else if (prevTab && (prevTab.type === "chart" || prevTab.type === "panel" || prevTab.type === "line_event_editor" || prevTab.type === "unified_editor")) {
+    } else if (prevTab && (prevTab.type === "chart" || prevTab.type === "panel" || prevTab.type === "line_event_editor" || prevTab.type === "unified_editor" || prevTab.type === "unrolled_editor")) {
       // Save session when leaving a chart-like tab
       let saveId: string | null = null;
-      if (prevTab.type === "chart" || prevTab.type === "unified_editor") {
-        // Chart and unified_editor tabs own their own session
+      if (prevTab.type === "chart" || prevTab.type === "unified_editor" || prevTab.type === "unrolled_editor") {
+        // Chart, unified_editor, and unrolled_editor tabs own their own session
         saveId = prevTab.id;
       } else {
         // Panel/line_event_editor: save under the most recent chart-like tab
         const chartLikeTabs = tabs.filter(
-          (t) => t.type === "chart" || t.type === "unified_editor"
+          (t) => t.type === "chart" || t.type === "unified_editor" || t.type === "unrolled_editor"
         );
         saveId = chartLikeTabs.length > 0 ? chartLikeTabs[chartLikeTabs.length - 1].id : null;
       }
@@ -237,8 +277,8 @@ export default function App() {
       }
     }
 
-    // Restore session when entering a chart or unified_editor tab
-    if (newTab && (newTab.type === "chart" || newTab.type === "unified_editor")) {
+    // Restore session when entering a chart, unified_editor, or unrolled_editor tab
+    if (newTab && (newTab.type === "chart" || newTab.type === "unified_editor" || newTab.type === "unrolled_editor")) {
       if (!shouldSkipRestore()) {
         restoreSession(newTab.id).catch((err) => {
           console.warn("[App] Failed to restore chart session:", err);
@@ -247,12 +287,20 @@ export default function App() {
     }
   }, [activeTabId, tabs, isLoaded]);
 
-  // When chart is closed, close chart tabs, panel tabs, and clean up sessions
+  // When chart is closed, unload audio, close chart tabs, and clean up sessions.
+  // This prevents stale audio/illustration from leaking into a new chart.
   useEffect(() => {
     if (!isLoaded) {
+      // Stop and unload audio so it doesn't keep playing after close
+      audioEngine.unload();
+      useAudioStore.getState().setMusicLoaded(false);
+
+      // Close any open dialogs to prevent orphaned dialogs from previous project
+      useDialogStore.getState().clearAll();
+
       const tabState = useTabStore.getState();
       const chartTabs = tabState.tabs.filter(
-        (t) => t.type === "chart" || t.type === "line_event_editor" || t.type === "panel" || t.type === "unified_editor",
+        (t) => t.type === "chart" || t.type === "line_event_editor" || t.type === "panel" || t.type === "unified_editor" || t.type === "unrolled_editor",
       );
       for (const t of chartTabs) {
         deleteSession(t.id);
@@ -304,8 +352,8 @@ export default function App() {
   /** Add a panel to the layout if it isn't already visible */
   const togglePanel = useCallback(
     (panelId: PanelId) => {
-      // In unified editor mode, route to the canvas panel drawer
-      if (activeTab?.type === "unified_editor") {
+      // In unified/unrolled editor mode, route to the canvas panel drawer
+      if (activeTab?.type === "unified_editor" || activeTab?.type === "unrolled_editor") {
         const { toggleCanvasPanel } = useEditorStore.getState();
         toggleCanvasPanel(panelId);
         return;
@@ -324,7 +372,7 @@ export default function App() {
 
   /** Open an on-demand panel as an overlay in the unified editor drawer */
   const handleShowOnDemandPanel = useCallback((id: PanelId) => {
-    if (activeTab?.type === "unified_editor") {
+    if (activeTab?.type === "unified_editor" || activeTab?.type === "unrolled_editor") {
       const es = useEditorStore.getState();
       // Ensure the drawer is open (default to timeline if closed)
       if (!es.canvasActivePanelId) es.setCanvasActivePanel("timeline");
@@ -354,21 +402,29 @@ export default function App() {
       <MenuBar
         onTogglePanel={togglePanel}
         onResetLayout={resetLayout}
-        onNewChart={() => setShowNewProject(true)}
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenCommandPalette={() => setShowCommandPalette(true)}
-        onShowParametric={() => setShowParametric(true)}
-        onShowBatchLine={() => setShowBatchLine(true)}
-        onShowLyricsSync={() => setShowLyricsSync(true)}
+        onNewChart={() => openDialog("new-project")}
+        onOpenSettings={() => openDialog("settings")}
+        onOpenCommandPalette={() => openDialog("command-palette")}
+        onShowParametric={() => openDialog("parametric")}
+        onShowBatchLine={() => openDialog("batch-line")}
+        onShowLyricsSync={() => openDialog("lyrics-sync")}
         onShowOnDemandPanel={handleShowOnDemandPanel}
+        onShowPasteSpecial={() => openDialog("paste-special")}
+        onShowGoToBeat={() => openDialog("go-to-beat")}
+        onShowExportDiff={() => openDialog("export-diff")}
+        onShowSelectiveExport={() => openDialog("selective-export")}
+        onShowSpinGenerator={() => openDialog("spin-generator")}
+        onShowShakeGenerator={() => openDialog("shake-generator")}
+        onShowNotePattern={() => openDialog("note-pattern")}
       />
       <TabBar />
 
       {activeTab.type === "chart" && <QuickActionBar />}
 
-      <div className="flex-1 overflow-hidden relative">
+      <div className="flex-1 overflow-hidden relative flex">
+        <div className="flex-1 overflow-hidden relative">
         {activeTab.type === "home" && (
-          <HomeScreen onNewChart={() => setShowNewProject(true)} onImportChart={triggerImportChart} />
+          <HomeScreen onNewChart={() => openDialog("new-project")} onImportChart={triggerImportChart} />
         )}
         {activeTab.type === "chart" && (
           <Mosaic<PanelId>
@@ -417,22 +473,64 @@ export default function App() {
         {activeTab.type === "unified_editor" && (
           <UnifiedEditorTab />
         )}
+        {activeTab.type === "unrolled_editor" && (
+          <UnrolledEditorTab lineIndex={activeTab.data?.lineIndex as number | undefined} />
+        )}
         {activeTab.type === "panel" && activeTab.data && (
           <div className="w-full h-full" style={{ backgroundColor: "var(--bg-secondary)" }}>
             {renderPanelTab(activeTab.data.panelId as string)}
           </div>
         )}
+        </div>
+        {isLoaded && (
+          <ContextPanelSidebar
+            onShowPasteSpecial={() => openDialog("paste-special")}
+            onShowRecordReview={() => openDialog("record-review")}
+            onShowExportDiff={() => openDialog("export-diff")}
+            onShowSelectiveExport={() => openDialog("selective-export")}
+            onShowGoToBeat={() => openDialog("go-to-beat")}
+            onShowBatchLine={() => openDialog("batch-line")}
+            onShowLyricsSync={() => openDialog("lyrics-sync")}
+            onShowParametric={() => openDialog("parametric")}
+            onShowSpinGenerator={() => openDialog("spin-generator")}
+            onShowShakeGenerator={() => openDialog("shake-generator")}
+          />
+        )}
       </div>
 
-      {(activeTab.type === "chart" || activeTab.type === "panel" || activeTab.type === "unified_editor") && <StatusBar />}
-      <NewProjectDialog open={showNewProject} onClose={() => setShowNewProject(false)} />
-      <ParametricDialog open={showParametric} onClose={() => setShowParametric(false)} />
-      <BatchLineDialog open={showBatchLine} onClose={() => setShowBatchLine(false)} />
-      <LyricsSyncDialog open={showLyricsSync} onClose={() => setShowLyricsSync(false)} />
-      <NotePatternDialog open={showNotePattern} onClose={() => setShowNotePattern(false)} />
-      <SpinGeneratorDialog open={showSpinGenerator} onClose={() => setShowSpinGenerator(false)} />
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
-      <CommandPalette open={showCommandPalette} onClose={() => setShowCommandPalette(false)} />
+      {(activeTab.type === "chart" || activeTab.type === "panel") && <StatusBar />}
+      <NewProjectDialog open={showNewProject} onClose={() => closeDialog("new-project")} />
+      <ParametricDialog open={showParametric} onClose={() => closeDialog("parametric")} />
+      <BatchLineDialog open={showBatchLine} onClose={() => closeDialog("batch-line")} />
+      <LyricsSyncDialog open={showLyricsSync} onClose={() => closeDialog("lyrics-sync")} />
+      <NotePatternDialog open={showNotePattern} onClose={() => closeDialog("note-pattern")} />
+      <SpinGeneratorDialog open={showSpinGenerator} onClose={() => closeDialog("spin-generator")} />
+      <ShakeGeneratorDialog open={showShakeGenerator} onClose={() => closeDialog("shake-generator")} />
+      <SettingsModal open={showSettings} onClose={() => closeDialog("settings")} />
+      <PasteSpecialDialog open={showPasteSpecial} onClose={() => closeDialog("paste-special")} />
+      <GoToBeatDialog open={showGoToBeat} onClose={() => closeDialog("go-to-beat")} />
+      <ExportDiffDialog open={showExportDiff} onClose={() => closeDialog("export-diff")} />
+      <SelectiveExportDialog open={showSelectiveExport} onClose={() => closeDialog("selective-export")} />
+      <RecordReviewDialog open={showRecordReview} onClose={() => closeDialog("record-review")} onAccept={() => closeDialog("record-review")} />
+      <CalibrationDialog open={showOnsetCalibration} onClose={() => closeDialog("onset-calibration")} />
+      <CommandPalette
+        open={showCommandPalette}
+        onClose={() => closeDialog("command-palette")}
+        onTogglePanel={togglePanel}
+        onResetLayout={resetLayout}
+        onNewChart={() => openDialog("new-project")}
+        onShowParametric={() => openDialog("parametric")}
+        onShowBatchLine={() => openDialog("batch-line")}
+        onShowLyricsSync={() => openDialog("lyrics-sync")}
+        onShowOnDemandPanel={handleShowOnDemandPanel}
+        onShowPasteSpecial={() => openDialog("paste-special")}
+        onShowGoToBeat={() => openDialog("go-to-beat")}
+        onShowExportDiff={() => openDialog("export-diff")}
+        onShowSelectiveExport={() => openDialog("selective-export")}
+        onShowSpinGenerator={() => openDialog("spin-generator")}
+        onShowShakeGenerator={() => openDialog("shake-generator")}
+      />
+      <FavoritesWizard />
       <ToastContainer />
       <ConfirmDialog />
     </div>

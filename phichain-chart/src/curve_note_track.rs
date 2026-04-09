@@ -47,6 +47,11 @@ pub fn generate_notes(from: Note, to: Note, options: &CurveNoteTrackOptions) -> 
         beat!(1, options.density),
     )
     .collect::<Vec<_>>();
+
+    if beats.is_empty() {
+        return vec![];
+    }
+
     let notes = beats
         .iter()
         .enumerate()

@@ -12,7 +12,7 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useTabStore } from "../../stores/tabStore";
 import { audioEngine } from "../../audio/audioEngine";
 import { isTauri, pickFile, createProject, loadProject } from "../../utils/ipc";
-import { saveSession, registerSession, setSkipNextSave, setSkipNextRestore } from "../../utils/chartSessions";
+import { saveSession, registerSession, setSkipNextSave, setSkipNextRestore, setAudioBlobUrl } from "../../utils/chartSessions";
 import { useRecentProjectsStore } from "../../stores/recentProjectsStore";
 import { saveStoredProject } from "../../utils/projectStorage";
 import type { ProjectMeta, PhichainChart } from "../../types/chart";
@@ -327,7 +327,7 @@ export function NewProjectDialog({ open, onClose }: Props) {
         const extMap: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
         const ext = extMap[audioMeta.coverArt.format] ?? "jpg";
         const coverFile = new File(
-          [audioMeta.coverArt.data],
+          [audioMeta.coverArt.data.slice()],
           `cover.${ext}`,
           { type: audioMeta.coverArt.format },
         );
@@ -469,6 +469,8 @@ export function NewProjectDialog({ open, onClose }: Props) {
         await audioEngine.load(objectUrl, ext);
         useAudioStore.getState().setMusicLoaded(true);
         musicUrl = objectUrl;
+        // Track the blob URL + format so tab session restore can reuse it
+        setAudioBlobUrl(objectUrl, ext);
       }
 
       let illustrationUrl: string | null = null;
@@ -525,6 +527,7 @@ export function NewProjectDialog({ open, onClose }: Props) {
         meta: finalMeta,
         audioBlob: musicFile ? await musicFile.arrayBuffer() : null,
         audioExt: musicFile ? (musicFile.name.split(".").pop()?.toLowerCase() ?? null) : null,
+        illustrationBlob: illustrationFile ? await illustrationFile.arrayBuffer() : null,
         savedAt: Date.now(),
       });
       useRecentProjectsStore.getState().addRecent({

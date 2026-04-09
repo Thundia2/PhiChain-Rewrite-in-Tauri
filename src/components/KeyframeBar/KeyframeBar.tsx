@@ -22,11 +22,12 @@ import { useAudioStore } from "../../stores/audioStore";
 import { useGroupStore } from "../../stores/groupStore";
 import { useBookmarkStore } from "../../stores/bookmarkStore";
 import type { Bookmark } from "../../types/bookmark";
-import { BpmList } from "../../utils/bpmList";
+import { getCachedBpmList } from "../../stores/chartStore";
 import { beatToFloat, floatToBeat } from "../../types/chart";
 import type { Beat, LineEvent, LineEventKind, EasingType } from "../../types/chart";
-import { EVENT_COLORS } from "../../constants/eventColors";
+import { EVENT_COLORS, KIND_SHORT, CORE_KINDS, DEFAULT_EVENT_VALUES } from "../../constants/eventConfig";
 import { EASING_OPTIONS } from "../common/FormFields";
+import { evaluateEasing } from "../../canvas/easings";
 import { KeyframeBarHeader } from "./KeyframeBarHeader";
 import { CurveGraph } from "./CurveGraph";
 import { PopoutCurveEditor } from "./PopoutCurveEditor";
@@ -70,21 +71,8 @@ function CurveEditorResizeHandle() {
 // Constants
 // ============================================================
 
-const KIND_SHORT: Record<string, string> = {
-  x: "X", y: "Y", rotation: "R", opacity: "O", speed: "S",
-  scale_x: "SX", scale_y: "SY", color: "C", text: "T", incline: "I", gif: "GIF",
-};
-
-const CORE_KINDS: LineEventKind[] = ["x", "y", "rotation", "opacity", "speed"];
-
 const DIAMOND_SIZE = 5;
 const DIAMOND_HIT_RADIUS = 7; // slightly larger than render for easier clicking
-
-/** Default constant values when creating new events */
-const DEFAULT_VALUES: Record<string, number> = {
-  x: 0, y: 0, rotation: 0, opacity: 255, speed: 1,
-  scale_x: 1, scale_y: 1, incline: 0, gif: 0,
-};
 
 // ============================================================
 // Context menu types
@@ -365,6 +353,38 @@ export function KeyframeBar() {
         }
       }
 
+      // ---- Loop region highlight ----
+      const { loopEnabled, loopStartBeat, loopEndBeat } = useAudioStore.getState();
+      if (loopStartBeat !== null && loopEndBeat !== null) {
+        const loopStartPx = beatToPixel(loopStartBeat, width);
+        const loopEndPx = beatToPixel(loopEndBeat, width);
+        const bandLeft = Math.max(0, Math.min(loopStartPx, loopEndPx));
+        const bandRight = Math.min(width, Math.max(loopStartPx, loopEndPx));
+
+        // Draw the highlighted loop band
+        ctx.fillStyle = loopEnabled ? "rgba(100, 200, 255, 0.12)" : "rgba(100, 200, 255, 0.05)";
+        ctx.fillRect(bandLeft, 0, bandRight - bandLeft, height);
+
+        // Draw dashed boundary lines at loop edges
+        ctx.save();
+        ctx.strokeStyle = loopEnabled ? "rgba(100, 200, 255, 0.6)" : "rgba(100, 200, 255, 0.25)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        if (loopStartPx >= 0 && loopStartPx <= width) {
+          ctx.beginPath();
+          ctx.moveTo(loopStartPx, 0);
+          ctx.lineTo(loopStartPx, height);
+          ctx.stroke();
+        }
+        if (loopEndPx >= 0 && loopEndPx <= width) {
+          ctx.beginPath();
+          ctx.moveTo(loopEndPx, 0);
+          ctx.lineTo(loopEndPx, height);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       // ---- Event keyframe diamonds (multi-property) ----
       const layerIdx = es.eventEditorActiveLayer;
       const allKinds: LineEventKind[] = [
@@ -567,7 +587,7 @@ export function KeyframeBar() {
       }
 
       // ---- Playhead (current time) ----
-      const bpmList = new BpmList(cs.chart.bpm_list);
+      const bpmList = getCachedBpmList();
       const curBeat = bpmList.beatAtFloat(currentTime - cs.chart.offset);
       const playheadPx = beatToPixel(curBeat, width);
 
@@ -599,11 +619,51 @@ export function KeyframeBar() {
   // ---- Seek to beat helper ----
   const seekToBeat = useCallback((beat: number) => {
     const cs = useChartStore.getState();
-    const bpmList = new BpmList(cs.chart.bpm_list);
+    const bpmList = getCachedBpmList();
     const time = bpmList.timeAtFloat(beat) + cs.chart.offset;
     useAudioStore.getState().seek(time);
     useEditorStore.getState().setEventEditorBeat(beat);
   }, []);
+
+  // ---- Double-click: create new constant event ----
+  const handleDoubleClickCreate = useCallback((mouseX: number, mouseY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const data = getDisplayData();
+    if (!data) return;
+
+    const kind = getKindAtY(mouseY);
+    if (!kind) return;
+
+    // Don't create color or text events via double-click (they need special value types)
+    if (kind === "color" || kind === "text") return;
+
+    const beat = Math.max(0, pixelToBeat(mouseX, canvas.width));
+    const beatTuple: Beat = floatToBeat(beat, 32);
+    const farBeat: Beat = floatToBeat(beat + 4, 32); // 4 beats duration
+
+    const defaultVal = DEFAULT_EVENT_VALUES[kind] ?? 0;
+
+    const newEvent: LineEvent = {
+      kind,
+      start_beat: beatTuple,
+      end_beat: farBeat,
+      value: { constant: defaultVal },
+    };
+
+    const { lineIdx, layerIdx } = data;
+
+    if (layerIdx >= 0) {
+      // Layer-aware add
+      useChartStore.getState().addEventToLayer(lineIdx, layerIdx, kind, newEvent);
+    } else {
+      useChartStore.getState().addEvent(lineIdx, newEvent);
+    }
+
+    // Seek to the new event's beat
+    seekToBeat(beat);
+  }, [pixelToBeat, getDisplayData, getKindAtY, seekToBeat]);
 
   // ---- Click: diamond select or seek ----
   const handleStripMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -668,47 +728,7 @@ export function KeyframeBar() {
     useBookmarkStore.getState().clearBookmarkSelection();
 
     isDragging.current = true;
-  }, [pixelToBeat, hitTestDiamond, hitTestBookmark, seekToBeat]);
-
-  // ---- Double-click: create new constant event ----
-  const handleDoubleClickCreate = useCallback((mouseX: number, mouseY: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const data = getDisplayData();
-    if (!data) return;
-
-    const kind = getKindAtY(mouseY);
-    if (!kind) return;
-
-    // Don't create color or text events via double-click (they need special value types)
-    if (kind === "color" || kind === "text") return;
-
-    const beat = Math.max(0, pixelToBeat(mouseX, canvas.width));
-    const beatTuple: Beat = floatToBeat(beat, 32);
-    const farBeat: Beat = floatToBeat(beat + 4, 32); // 4 beats duration
-
-    const defaultVal = DEFAULT_VALUES[kind] ?? 0;
-
-    const newEvent: LineEvent = {
-      kind,
-      start_beat: beatTuple,
-      end_beat: farBeat,
-      value: { constant: defaultVal },
-    };
-
-    const { lineIdx, layerIdx } = data;
-
-    if (layerIdx >= 0) {
-      // Layer-aware add
-      useChartStore.getState().addEventToLayer(lineIdx, layerIdx, kind, newEvent);
-    } else {
-      useChartStore.getState().addEvent(lineIdx, newEvent);
-    }
-
-    // Seek to the new event's beat
-    seekToBeat(beat);
-  }, [pixelToBeat, getDisplayData, getKindAtY, seekToBeat]);
+  }, [pixelToBeat, hitTestDiamond, hitTestBookmark, handleDoubleClickCreate, seekToBeat]);
 
   // ---- Right-click: context menu ----
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -759,6 +779,7 @@ export function KeyframeBar() {
     if (!data) return;
 
     const { hit } = contextMenu;
+    if (!hit) return;
     const { lineIdx, layerIdx } = data;
 
     if (layerIdx >= 0) {
@@ -799,6 +820,7 @@ export function KeyframeBar() {
     if (!data) return;
 
     const { hit } = contextMenu;
+    if (!hit) return;
     const { lineIdx, layerIdx } = data;
     const event = hit.event;
 
@@ -1242,6 +1264,95 @@ export function KeyframeBar() {
                 onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
               >
                 Delete Event
+              </button>
+
+              {/* Split Event at Playhead */}
+              <button
+                onClick={() => {
+                  if (!contextMenu?.hit) return;
+                  const cs = useChartStore.getState();
+                  const as_ = useAudioStore.getState();
+                  const es = useEditorStore.getState();
+                  if (es.selectedLineIndex === null) return;
+
+                  const bpmList = getCachedBpmList();
+                  const splitBeat = bpmList.beatAtFloat(Math.max(0, as_.currentTime - cs.chart.offset));
+                  const event = contextMenu.hit.event;
+                  const startBeat = beatToFloat(event.start_beat);
+                  const endBeat = beatToFloat(event.end_beat);
+
+                  // Only split if playhead is within the event's range
+                  if (splitBeat <= startBeat || splitBeat >= endBeat) {
+                    setContextMenu(null);
+                    return;
+                  }
+
+                  const t = (splitBeat - startBeat) / (endBeat - startBeat);
+                  let event1: LineEvent | null = null;
+                  let event2: LineEvent | null = null;
+
+                  if ("transition" in event.value) {
+                    const { start, end, easing } = event.value.transition;
+                    const midValue = start + (end - start) * evaluateEasing(easing, t);
+                    event1 = {
+                      ...structuredClone(event),
+                      end_beat: floatToBeat(splitBeat),
+                      value: { transition: { start, end: midValue, easing } },
+                    };
+                    event2 = {
+                      ...structuredClone(event),
+                      start_beat: floatToBeat(splitBeat),
+                      value: { transition: { start: midValue, end, easing } },
+                    };
+                  } else if ("constant" in event.value) {
+                    event1 = { ...structuredClone(event), end_beat: floatToBeat(splitBeat) };
+                    event2 = { ...structuredClone(event), start_beat: floatToBeat(splitBeat) };
+                  }
+
+                  if (event1 && event2) {
+                    // globalEventIndex maps to the flat events array index when not in layer mode
+                    cs.replaceEvent(es.selectedLineIndex, contextMenu.hit.globalEventIndex, [event1, event2]);
+                  }
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: "block", width: "100%", padding: "4px 12px",
+                  background: "transparent", border: "none", color: "#ccc",
+                  cursor: "pointer", fontSize: 11, textAlign: "left", fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+              >
+                Split at Playhead
+              </button>
+
+              {/* Duplicate Event After */}
+              <button
+                onClick={() => {
+                  if (!contextMenu?.hit) return;
+                  const cs = useChartStore.getState();
+                  const es = useEditorStore.getState();
+                  if (es.selectedLineIndex === null) return;
+
+                  const event = contextMenu.hit.event;
+                  const duration = beatToFloat(event.end_beat) - beatToFloat(event.start_beat);
+                  const newEvent: LineEvent = {
+                    ...structuredClone(event),
+                    start_beat: event.end_beat,
+                    end_beat: floatToBeat(beatToFloat(event.end_beat) + duration),
+                  };
+                  cs.addEvent(es.selectedLineIndex, newEvent);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: "block", width: "100%", padding: "4px 12px",
+                  background: "transparent", border: "none", color: "#ccc",
+                  cursor: "pointer", fontSize: 11, textAlign: "left", fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-active)"; }}
+                onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+              >
+                Duplicate After
               </button>
 
               {/* Divider */}

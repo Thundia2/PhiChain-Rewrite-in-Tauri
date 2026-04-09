@@ -10,6 +10,7 @@ import { useState } from "react";
 
 /* ── Style Constants ── */
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const INPUT_STYLE: React.CSSProperties = {
   height: 24,
   padding: "4px 8px",
@@ -23,6 +24,7 @@ export const INPUT_STYLE: React.CSSProperties = {
   boxSizing: "border-box",
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const SELECT_STYLE: React.CSSProperties = {
   ...INPUT_STYLE,
   cursor: "pointer",

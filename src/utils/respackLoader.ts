@@ -84,7 +84,7 @@ function parseInfoYml(text: string): RespackConfig {
     if (colonIdx < 0) continue;
 
     const key = line.slice(0, colonIdx).trim();
-    let val = line.slice(colonIdx + 1).trim();
+    const val = line.slice(colonIdx + 1).trim();
 
     // Strip surrounding quotes
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {

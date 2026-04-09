@@ -1,3 +1,12 @@
+// ============================================================
+// Line List — Scrollable list of chart judgment lines
+//
+// Displays all lines in the chart with sorting (index, name,
+// note count, first appearance), filtering by category, and
+// group color indicators. Supports multi-select, drag
+// reordering, and inline actions (add, duplicate, delete).
+// ============================================================
+
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useChartStore } from "../../stores/chartStore";
 import { useEditorStore } from "../../stores/editorStore";
@@ -7,7 +16,7 @@ import { useGroupStore } from "../../stores/groupStore";
 import { evaluateLineEventsWithLayers, getFirstAppearanceBeat } from "../../canvas/events";
 import { BpmList } from "../../utils/bpmList";
 import type { LineSortMode } from "../../types/editor";
-import { ActionButton, Badge, SELECT_STYLE } from "../common/UIKit";
+import { ActionButton, SELECT_STYLE } from "../common/UIKit";
 import { LINE_CATEGORY_COLORS, LINE_CATEGORY_LABELS, autoCategorize } from "./lineCategories";
 import { LineContextMenu } from "./LineContextMenu";
 
