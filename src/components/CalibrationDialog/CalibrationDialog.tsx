@@ -9,7 +9,8 @@
 // and onset markers. The shared sensitivity slider updates all
 // 4 panels in real-time (<5ms via pickOnsetsFromFlux).
 //
-// Recent change: Created for onset calibration wizard feature.
+// Recent change: Moved handleApply above keyboard useEffect to fix
+// TS2448/TS2454 temporal dead zone build errors.
 // ============================================================
 
 import React, { useRef, useEffect, useState, useCallback } from "react";
@@ -121,8 +122,23 @@ export function CalibrationDialog({ open, onClose }: CalibrationDialogProps) {
     };
   }, [open]);
 
+  // ---- Apply calibrated sensitivity ----
+  const handleApply = useCallback(() => {
+    useSettingsStore.getState().updateSettings({ onsetSensitivity: sensitivity });
+    useToastStore.getState().addToast({
+      message: `Onset sensitivity set to ${Math.round(sensitivity * 100)}%`,
+      type: "success",
+    });
+    // Stop any preview
+    if (playTimerRef.current) {
+      clearTimeout(playTimerRef.current);
+      audioEngine.pause();
+    }
+    onClose();
+  }, [sensitivity, onClose]);
+
   // ---- Keyboard: Escape=close, Enter=apply ----
-  // Fixed: was missing dependency array, causing listener re-attachment every render
+  // Fixed: moved handleApply above this effect to avoid temporal dead zone
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -156,21 +172,6 @@ export function CalibrationDialog({ open, onClose }: CalibrationDialogProps) {
       playTimerRef.current = null;
     }, durationMs);
   }, []);
-
-  // ---- Apply calibrated sensitivity ----
-  const handleApply = useCallback(() => {
-    useSettingsStore.getState().updateSettings({ onsetSensitivity: sensitivity });
-    useToastStore.getState().addToast({
-      message: `Onset sensitivity set to ${Math.round(sensitivity * 100)}%`,
-      type: "success",
-    });
-    // Stop any preview
-    if (playTimerRef.current) {
-      clearTimeout(playTimerRef.current);
-      audioEngine.pause();
-    }
-    onClose();
-  }, [sensitivity, onClose]);
 
   if (!open) return null;
 
