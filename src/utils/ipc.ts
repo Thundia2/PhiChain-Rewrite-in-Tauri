@@ -113,6 +113,81 @@ export async function getAppVersion(): Promise<string> {
 }
 
 // ============================================================
+// AI generation proxy
+// ============================================================
+
+export interface AiGenerateRequest {
+  endpoint: string;
+  model: string;
+  messages: Array<{ role: string; content: string }>;
+  temperature: number;
+  maxTokens: number;
+  apiKey?: string;   // Optional API key for remote endpoints (sent as Bearer token)
+}
+
+export interface AiGenerateResponse {
+  content: string;
+  finishReason: string;
+  promptTokens?: number;
+  completionTokens?: number;
+}
+
+/**
+ * Proxy an AI chat completion request through the Tauri backend (non-streaming).
+ */
+export async function generateAi(request: AiGenerateRequest): Promise<AiGenerateResponse> {
+  return invoke<AiGenerateResponse>("ai_generate", { request });
+}
+
+/** Payload for each streaming chunk emitted by the Rust backend */
+export interface AiStreamChunk {
+  content: string;
+  done: boolean;
+  finishReason?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  error?: string;
+}
+
+/**
+ * Streaming AI generation — tokens arrive via Tauri events as they generate.
+ *
+ * Sets up a listener for "ai-stream-chunk" events BEFORE invoking the command
+ * (so no early chunks are missed). Returns the final assembled response.
+ *
+ * @param request  - Same request payload as generateAi
+ * @param onChunk  - Called for each streaming chunk (token, done signal, or error)
+ * @returns The fully assembled response (same shape as generateAi)
+ */
+export async function generateAiStream(
+  request: AiGenerateRequest,
+  onChunk: (chunk: AiStreamChunk) => void,
+): Promise<AiGenerateResponse> {
+  if (!isTauri()) {
+    throw new Error(
+      `Cannot call Tauri streaming command — not running inside Tauri. ` +
+      `Start with "npm run tauri:dev" instead of "npm run dev".`
+    );
+  }
+
+  // Dynamic import to match the project's existing pattern
+  const { listen } = await import("@tauri-apps/api/event");
+
+  // Start listening BEFORE invoking — guarantees no chunks are missed
+  const unlisten = await listen<AiStreamChunk>("ai-stream-chunk", (event) => {
+    onChunk(event.payload);
+  });
+
+  try {
+    const result = await invoke<AiGenerateResponse>("ai_generate_stream", { request });
+    return result;
+  } finally {
+    // Always clean up the listener
+    unlisten();
+  }
+}
+
+// ============================================================
 // File dialog helpers (using Tauri's dialog plugin)
 // ============================================================
 
@@ -172,4 +247,28 @@ export function readAudioFileAsUrl(filePath: string): Promise<string> {
 /** Shorthand: read an image file and return a blob URL with correct MIME */
 export function readImageFileAsUrl(filePath: string): Promise<string> {
   return readFileAsObjectUrl(filePath, MIME_IMAGE);
+}
+
+// ---- ML onset detection commands ----
+
+/** Per-frame onset detection result from the Rust CNN pipeline. */
+export interface OnsetResult {
+  /** Time in seconds from the start of the audio file. */
+  time: number;
+  /** CNN onset probability 0.0–1.0 (higher = more confident). */
+  probability: number;
+}
+
+/** Run ML onset detection on an audio file. musicPath must be absolute. */
+export async function detectOnsetsMl(musicPath: string): Promise<OnsetResult[]> {
+  return invoke<OnsetResult[]>("detect_onsets_ml", { musicPath });
+}
+
+/**
+ * Write audio bytes to a temp file for onset detection of imported charts.
+ * Tauri 2 IPC serializes Uint8Array as raw bytes (Vec<u8>) — pass directly,
+ * do NOT wrap in Array.from().
+ */
+export async function writeTempAudio(audioBytes: Uint8Array, extension: string): Promise<string> {
+  return invoke<string>("write_temp_audio", { audioBytes, extension });
 }

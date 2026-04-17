@@ -7,13 +7,13 @@ const DENSITY_OPTIONS = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32];
 export function TimelineSettings() {
   const zoom = useEditorStore((s) => s.timelineZoom);
   const density = useEditorStore((s) => s.density);
-  const lanes = useEditorStore((s) => s.lanes);
+  const verticalLines = useEditorStore((s) => s.verticalLines);
   const noteSideFilter = useEditorStore((s) => s.noteSideFilter);
   const showSpectrogram = useEditorStore((s) => s.showSpectrogram);
   const spectrogramOpacity = useEditorStore((s) => s.spectrogramOpacity);
   const setTimelineZoom = useEditorStore((s) => s.setTimelineZoom);
   const setDensity = useEditorStore((s) => s.setDensity);
-  const setLanes = useEditorStore((s) => s.setLanes);
+  const setVerticalLines = useEditorStore((s) => s.setVerticalLines);
   const setNoteSideFilter = useEditorStore((s) => s.setNoteSideFilter);
   const setShowSpectrogram = useEditorStore((s) => s.setShowSpectrogram);
   const setSpectrogramOpacity = useEditorStore((s) => s.setSpectrogramOpacity);
@@ -51,14 +51,14 @@ export function TimelineSettings() {
             ))}
           </select>
         </CardRow>
-        <CardRow label="Lanes">
+        <CardRow label="X Grid Lines">
           <input
             style={{ ...INPUT_STYLE, width: 50 }}
             type="number"
-            min={1}
-            max={32}
-            value={lanes}
-            onChange={(e) => setLanes(parseInt(e.target.value) || 9)}
+            min={2}
+            max={256}
+            value={verticalLines}
+            onChange={(e) => setVerticalLines(parseInt(e.target.value) || 21)}
           />
         </CardRow>
         <CardRow label="Side filter" last>

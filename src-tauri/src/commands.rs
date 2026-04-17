@@ -17,6 +17,13 @@
 //   - Compiling charts (merging child lines, evaluating curves)
 //
 // None of that code is duplicated here — we just call into it.
+//
+// Recent change (bug audit #16): validate_path now rejects empty
+// paths and paths without a file_name component in the fallback
+// branch (when canonicalize fails because the leaf doesn't exist
+// yet). Previously file_name().unwrap_or_default() silently fell
+// back to an empty OsStr and "validated" the parent directory,
+// producing confusing errors downstream.
 // ============================================================
 
 use phichain_chart::project::{Project, ProjectMeta, ProjectPath};
@@ -29,6 +36,11 @@ use std::path::PathBuf;
 
 /// Validate that a path doesn't contain path traversal sequences.
 fn validate_path(path: &str) -> Result<PathBuf, String> {
+    // Bug audit #16: reject obviously invalid input up front.
+    if path.trim().is_empty() {
+        return Err("Path must not be empty".to_string());
+    }
+
     let path_buf = PathBuf::from(path);
 
     // Reject paths with traversal components
@@ -42,10 +54,16 @@ fn validate_path(path: &str) -> Result<PathBuf, String> {
     let canonical = std::fs::canonicalize(&path_buf)
         .or_else(|_| {
             // For new directories that don't exist yet, validate the parent
-            if let Some(parent) = path_buf.parent() {
-                std::fs::canonicalize(parent).map(|p| p.join(path_buf.file_name().unwrap_or_default()))
+            // (the leaf itself will be created later). We require the leaf
+            // to have a filename component — otherwise we'd silently resolve
+            // to the parent directory, which hides bugs in the caller.
+            if let (Some(parent), Some(leaf)) = (path_buf.parent(), path_buf.file_name()) {
+                std::fs::canonicalize(parent).map(|p| p.join(leaf))
             } else {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Invalid path"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Path must have a filename component",
+                ))
             }
         })
         .map_err(|e| format!("Invalid path: {}", e))?;

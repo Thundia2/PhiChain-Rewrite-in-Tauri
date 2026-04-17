@@ -88,6 +88,8 @@ fn merge(mut parent: SerializedLine) -> Vec<SerializedLine> {
                     let start = parent_start * child_start;
                     let end = parent_end * child_end;
 
+                    // Bug audit #9: new RPE round-trip fields default to None
+                    // for compiler-synthesized events.
                     merged_move_events.push(LineEvent {
                         kind: LineEventKind::X,
                         start_beat,
@@ -97,6 +99,10 @@ fn merge(mut parent: SerializedLine) -> Vec<SerializedLine> {
                             end.translation.x,
                             Easing::Linear,
                         ),
+                        easing_left: None,
+                        easing_right: None,
+                        linkgroup: None,
+                        font: None,
                     });
                     merged_move_events.push(LineEvent {
                         kind: LineEventKind::Y,
@@ -107,6 +113,10 @@ fn merge(mut parent: SerializedLine) -> Vec<SerializedLine> {
                             end.translation.y,
                             Easing::Linear,
                         ),
+                        easing_left: None,
+                        easing_right: None,
+                        linkgroup: None,
+                        font: None,
                     });
                     merged_rotate_events.push(LineEvent {
                         kind: LineEventKind::Rotation,
@@ -117,6 +127,10 @@ fn merge(mut parent: SerializedLine) -> Vec<SerializedLine> {
                             end.rotation.angle().to_degrees(),
                             Easing::Linear,
                         ),
+                        easing_left: None,
+                        easing_right: None,
+                        linkgroup: None,
+                        font: None,
                     });
 
                     current += minimum;

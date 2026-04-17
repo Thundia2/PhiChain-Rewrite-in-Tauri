@@ -9,7 +9,7 @@
     "file_new": "New Chart...",
     "file_save": "Save Project",
     "file_close": "Close Project",
-    "file_import_rpe": "Import RPE Chart...",
+    "file_import_chart": "Import Chart...",
     "file_preferences": "Preferences...",
     "file_quit": "Quit",
     "edit_undo": "Undo",
@@ -132,7 +132,7 @@
     "hotkeys_conflict": "Conflict: same binding as \"{{action}}\"",
     "project_settings": "Project Settings",
     "project_density": "Grid Density",
-    "project_lanes": "Lane Count",
+    "project_verticalLines": "X Grid Lines",
     "project_rotation_snap": "Rotation Snap"
   },
   "validation": {

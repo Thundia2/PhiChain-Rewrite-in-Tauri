@@ -47,7 +47,7 @@ export function WelcomeTab() {
       <GCard>
         <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.7 }}>
           <strong style={{ color: "var(--text-primary)" }}>Quick Start:</strong> Press <Kbd>Ctrl+N</Kbd> to create a new chart,
-          or <Kbd>Ctrl+O</Kbd> to import an existing RPE chart. Then use the toolbar to place notes
+          or <Kbd>Ctrl+O</Kbd> to import an existing chart. Then use the toolbar to place notes
           and the keyframe bar to animate lines. Press <Kbd>Space</Kbd> to preview your work.
         </div>
       </GCard>

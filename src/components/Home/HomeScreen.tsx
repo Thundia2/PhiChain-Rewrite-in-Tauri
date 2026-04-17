@@ -3,6 +3,10 @@
 //
 // Two-column layout: main content (welcome, action cards,
 // recent projects) + right sidebar (quick reference).
+//
+// Recent change: Added confirmation dialog to "Clear all" button
+// and individual delete (✕) buttons on each project row.
+// Both use the existing showConfirm() from ConfirmDialog.
 // ============================================================
 
 import { useState } from "react";
@@ -20,6 +24,7 @@ import {
   registerSession,
   setSkipNextSave,
   setSkipNextRestore,
+  setStoredProjectId,
 } from "../../utils/chartSessions";
 import { EditorGuideModal } from "./EditorGuideModal";
 
@@ -170,6 +175,10 @@ async function handleOpenRecent(project: RecentProject) {
       setAudioBlobUrl(url, stored.audioExt);
     }
 
+    // Bug audit #4: record the IndexedDB id so restoreSession can
+    // rematerialize audio from disk if this tab's blob URL dies later.
+    setStoredProjectId(project.id);
+
     // Restore illustration from saved blob (if available)
     if (stored.illustrationBlob) {
       const illuBlob = new Blob([stored.illustrationBlob]);
@@ -193,8 +202,11 @@ async function handleOpenRecent(project: RecentProject) {
 
 export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
   const [showGuide, setShowGuide] = useState(false);
+  // Track which project row is hovered (for showing the delete button)
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const projects = useRecentProjectsStore((s) => s.projects);
   const clearAll = useRecentProjectsStore((s) => s.clearAll);
+  const removeOne = useRecentProjectsStore((s) => s.removeOne);
 
   return (
     <div
@@ -248,7 +260,7 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
           <ActionCard
             icon="📥"
             title="Import chart"
-            description="Open an RPE .json, .zip, or .pez file"
+            description="Open a chart file (.json, .zip, .pez, .pec)"
             shortcut="Ctrl+O"
             onClick={onImportChart}
           />
@@ -293,7 +305,12 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
                   (e.currentTarget as HTMLElement).style.color =
                     "var(--text-muted)";
                 }}
-                onClick={clearAll}
+                onClick={async () => {
+                  const { showConfirm } = await import("../common/ConfirmDialog");
+                  if (await showConfirm(`Clear all ${projects.length} recent projects?`)) {
+                    clearAll();
+                  }
+                }}
               >
                 Clear all
               </button>
@@ -323,7 +340,9 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
                 overflow: "hidden",
               }}
             >
-              {projects.map((project, i) => (
+              {projects.map((project, i) => {
+                const isHovered = hoveredId === project.id;
+                return (
                 <div
                   key={project.id}
                   onClick={() => handleOpenRecent(project)}
@@ -342,10 +361,12 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLElement).style.backgroundColor =
                       "var(--bg-active)";
+                    setHoveredId(project.id);
                   }}
                   onMouseLeave={(e) => {
                     (e.currentTarget as HTMLElement).style.backgroundColor =
                       "transparent";
+                    setHoveredId(null);
                   }}
                 >
                   {/* Thumbnail */}
@@ -395,18 +416,56 @@ export function HomeScreen({ onNewChart, onImportChart }: HomeScreenProps) {
                         : ""}
                     </div>
                   </div>
-                  {/* Time */}
+                  {/* Time (hidden on hover) + Delete button (shown on hover) */}
                   <div
                     style={{
                       fontSize: 10,
                       color: "var(--text-muted)",
                       flexShrink: 0,
+                      display: isHovered ? "none" : "block",
                     }}
                   >
                     {timeAgo(project.timestamp)}
                   </div>
+                  {/* Delete button — appears on row hover */}
+                  <button
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 6,
+                      border: "none",
+                      background: "var(--bg-active)",
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      cursor: "pointer",
+                      display: isHovered ? "flex" : "none",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      transition: "color 0.12s, background 0.12s",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLElement).style.color = "var(--error)";
+                      (e.currentTarget as HTMLElement).style.background = "rgba(255, 74, 106, 0.15)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.color = "var(--text-muted)";
+                      (e.currentTarget as HTMLElement).style.background = "var(--bg-active)";
+                    }}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const { showConfirm } = await import("../common/ConfirmDialog");
+                      const name = project.name || "Untitled";
+                      if (await showConfirm(`Remove "${name}" from recent projects?`)) {
+                        removeOne(project.timestamp);
+                      }
+                    }}
+                  >
+                    ✕
+                  </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

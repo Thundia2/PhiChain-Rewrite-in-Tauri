@@ -12,7 +12,7 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useTabStore } from "../../stores/tabStore";
 import { audioEngine } from "../../audio/audioEngine";
 import { isTauri, pickFile, createProject, loadProject } from "../../utils/ipc";
-import { saveSession, registerSession, setSkipNextSave, setSkipNextRestore, setAudioBlobUrl } from "../../utils/chartSessions";
+import { saveSession, registerSession, setSkipNextSave, setSkipNextRestore, setAudioBlobUrl, setStoredProjectId } from "../../utils/chartSessions";
 import { useRecentProjectsStore } from "../../stores/recentProjectsStore";
 import { saveStoredProject } from "../../utils/projectStorage";
 import type { ProjectMeta, PhichainChart } from "../../types/chart";
@@ -518,8 +518,10 @@ export function NewProjectDialog({ open, onClose }: Props) {
       useTabStore.getState().openChart(chartId, finalMeta.name || "Untitled Chart");
       const tabId = useTabStore.getState().getChartTabId(chartId);
       setSkipNextRestore();
-      registerSession(tabId);
 
+      // Persist the project data to IndexedDB BEFORE registering the
+      // session, so the freshly-registered session snapshot already
+      // carries the IndexedDB id (bug audit #4 rematerialization path).
       const projectId = crypto.randomUUID();
       await saveStoredProject({
         id: projectId,
@@ -530,6 +532,10 @@ export function NewProjectDialog({ open, onClose }: Props) {
         illustrationBlob: illustrationFile ? await illustrationFile.arrayBuffer() : null,
         savedAt: Date.now(),
       });
+      setStoredProjectId(projectId);
+
+      // Now that the tracker is set, snapshot the session.
+      registerSession(tabId);
       useRecentProjectsStore.getState().addRecent({
         id: projectId,
         name: finalMeta.name || "Untitled",

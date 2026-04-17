@@ -66,7 +66,7 @@ export interface TimelineRenderParams {
   currentBeat: number;
   zoom: number;
   density: number;
-  lanes: number;
+  verticalLines: number;
   noteSideFilter: "all" | "above" | "below";
   selectedNoteIndices: number[];
   scrollBeat: number; // The beat at the bottom of the viewport
@@ -141,7 +141,7 @@ export class TimelineRenderer {
 
   render(params: TimelineRenderParams) {
     const {
-      notes, currentBeat, zoom, density, lanes,
+      notes, currentBeat, zoom, density, verticalLines,
       noteSideFilter, selectedNoteIndices,
       scrollBeat, canvasWidth, canvasHeight,
     } = params;
@@ -163,7 +163,7 @@ export class TimelineRenderer {
     this.drawBeatGrid(ctx, minBeat, maxBeat, density, pxPerBeat, scrollBeat, canvasWidth, canvasHeight);
 
     // ---- Lane guides ----
-    this.drawLaneGuides(ctx, lanes, noteAreaLeft, noteAreaWidth, canvasHeight);
+    this.drawLaneGuides(ctx, verticalLines, noteAreaLeft, noteAreaWidth, canvasHeight);
 
     // ---- Onset markers (behind notes, after grid) ----
     if (params.onsetMarkers && params.onsetMarkers.length > 0) {
@@ -368,29 +368,38 @@ export class TimelineRenderer {
 
   private drawLaneGuides(
     ctx: CanvasRenderingContext2D,
-    lanes: number,
+    verticalLines: number,
     noteAreaLeft: number, noteAreaWidth: number,
     canvasHeight: number,
   ) {
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-    ctx.lineWidth = 0.5;
+    if (verticalLines < 2) return;
 
-    for (let i = 1; i < lanes; i++) {
-      const x = noteAreaLeft + (i / lanes) * noteAreaWidth;
+    // Draw lines at actual snap positions: i/(N-1) for i = 0..N-1
+    // Center line is emphasised ONLY when N is odd (X=0 is a real snap point)
+    const isOdd = Number.isInteger(verticalLines) && verticalLines % 2 === 1;
+    const centerIdx = (verticalLines - 1) / 2;
+
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < verticalLines; i++) {
+      const t = i / (verticalLines - 1);
+      const x = noteAreaLeft + t * noteAreaWidth;
+
+      if (i === 0 || i === verticalLines - 1) {
+        // Edge lines — slightly brighter than interior
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+      } else if (isOdd && i === centerIdx) {
+        // Center line — only when N is odd (real snap point at X=0)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.23)";
+      } else {
+        // Regular interior grid line
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      }
+
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, canvasHeight);
       ctx.stroke();
     }
-
-    // Center lane (brighter)
-    const centerX = noteAreaLeft + noteAreaWidth / 2;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(centerX, 0);
-    ctx.lineTo(centerX, canvasHeight);
-    ctx.stroke();
   }
 
   /**

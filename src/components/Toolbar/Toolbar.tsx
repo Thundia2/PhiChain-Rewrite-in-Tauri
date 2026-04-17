@@ -38,8 +38,8 @@ export function Toolbar() {
   const toggleStepRecord = useEditorStore((s) => s.toggleStepRecord);
   const xSnapEnabled = useEditorStore((s) => s.xSnapEnabled);
   const toggleXSnap = useEditorStore((s) => s.toggleXSnap);
-  const lanes = useEditorStore((s) => s.lanes);
-  const setLanes = useEditorStore((s) => s.setLanes);
+  const verticalLines = useEditorStore((s) => s.verticalLines);
+  const setVerticalLines = useEditorStore((s) => s.setVerticalLines);
   const showBeatGrid = useSettingsStore((s) => s.showBeatGrid);
 
   return (
@@ -153,7 +153,7 @@ export function Toolbar() {
       {/* X Snap toggle */}
       <button
         onClick={toggleXSnap}
-        title={`X Snap (Shift+X) — snap notes to lane grid (${lanes} lanes)`}
+        title={`X Snap (Shift+X) — snap notes to vertical grid (${verticalLines} lines)`}
         style={{
           width: 36,
           height: 28,
@@ -176,17 +176,17 @@ export function Toolbar() {
         ⊞
       </button>
 
-      {/* Lane preset pills — set lanes AND enable snap in one click */}
-      {([9, 18, 30] as const).map((n) => {
-        const isActive = xSnapEnabled && lanes === n;
+      {/* Vertical line preset pills — set line count AND enable snap in one click */}
+      {([11, 21, 31, 17] as const).map((n) => {
+        const isActive = xSnapEnabled && verticalLines === n;
         return (
           <button
             key={n}
             onClick={() => {
-              setLanes(n);
+              setVerticalLines(n);
               if (!xSnapEnabled) toggleXSnap();
             }}
-            title={`${n}-lane grid (step ${Math.round(1350 / n)})`}
+            title={`${n}-line grid (step ${Math.round(1350 / (n - 1))})`}
             style={{
               width: 36,
               height: 20,

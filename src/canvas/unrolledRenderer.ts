@@ -6,8 +6,16 @@
 // This eliminates the non-linear distance computation of the
 // game renderer, making note placement intuitive and precise.
 //
-// Recent change: Added onset detection marker rendering.
-// Amber horizontal lines show detected audio onsets behind notes.
+// Recent change (bug audit #3 + #14):
+//   1. drawBeatGrid: replaced floating-point accumulation
+//      `for (let b = startBeat; b <= maxBeat + step; b += step)`
+//      with integer-indexed iteration `for (let i = ...; i++)` so
+//      grid lines don't drift out of alignment with note snap
+//      positions as scrollBeat grows. TimelineRenderer already had
+//      this fix; unrolled was missed in the dd7871d audit.
+//   2. Wrapped the pending-note `setLineDash([4,4])` block in
+//      try/finally so an exception can't leave the dash pattern
+//      set for subsequent draws that frame.
 // ============================================================
 
 import type { Note, CurveNoteTrack } from "../types/chart";
@@ -59,7 +67,7 @@ export interface UnrolledRenderParams {
   currentBeat: number;
   zoom: number;
   density: number;
-  lanes: number;
+  verticalLines: number;
   noteSideFilter: "all" | "above" | "below";
   selectedNoteIndices: number[];
   scrollBeat: number;
@@ -141,7 +149,7 @@ export class UnrolledRenderer {
 
   render(params: UnrolledRenderParams) {
     const {
-      notes, currentBeat, zoom, density, lanes,
+      notes, currentBeat, zoom, density, verticalLines,
       noteSideFilter, selectedNoteIndices,
       scrollBeat, canvasWidth, canvasHeight,
     } = params;
@@ -163,7 +171,7 @@ export class UnrolledRenderer {
     this.drawBeatGrid(ctx, minBeat, maxBeat, density, pxPerBeat, scrollBeat, canvasWidth, canvasHeight);
 
     // ---- Lane guides ----
-    this.drawLaneGuides(ctx, lanes, noteAreaLeft, noteAreaWidth, canvasHeight);
+    this.drawLaneGuides(ctx, verticalLines, noteAreaLeft, noteAreaWidth, canvasHeight);
 
     // ---- Region labels (ABOVE / BELOW) ----
     this.drawRegionLabels(ctx, noteAreaLeft, noteAreaWidth, canvasHeight);
@@ -279,17 +287,22 @@ export class UnrolledRenderer {
       const colorMap = pn.above ? ABOVE_NOTE_COLORS : BELOW_NOTE_COLORS;
       const color = colorMap[pn.kind] ?? "#fff";
 
+      // Bug audit #14: wrap setLineDash in try/finally so an exception
+      // in strokeRect can't leak the dash pattern into subsequent
+      // draw calls within this frame.
       ctx.globalAlpha = 0.3;
       ctx.fillStyle = color;
       ctx.fillRect(pnX - NOTE_WIDTH / 2, pnY - NOTE_HEIGHT / 2, NOTE_WIDTH, NOTE_HEIGHT);
 
-      // Ghost outline
       ctx.strokeStyle = color;
       ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.strokeRect(pnX - NOTE_WIDTH / 2, pnY - NOTE_HEIGHT / 2, NOTE_WIDTH, NOTE_HEIGHT);
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+      try {
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(pnX - NOTE_WIDTH / 2, pnY - NOTE_HEIGHT / 2, NOTE_WIDTH, NOTE_HEIGHT);
+      } finally {
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
     }
 
     // ---- Drag selection rectangle ----
@@ -344,14 +357,28 @@ export class UnrolledRenderer {
     scrollBeat: number,
     canvasWidth: number, canvasHeight: number,
   ) {
-    const step = density > 0 ? 1 / density : 1;
-    const startBeat = Math.floor(minBeat * density) / density;
+    // Bug audit #3: use integer indexing to avoid floating-point drift.
+    // The previous loop `for (let b = startBeat; b <= maxBeat + step; b += step)`
+    // accumulated ulp errors on each iteration; with density=8 (step=0.125)
+    // over a few hundred iterations the grid visibly slipped off the
+    // positions where notes actually snap. Iterating with an integer
+    // counter and computing `b = i / density` keeps every computed beat
+    // mathematically equal to a true snap position (same approach that
+    // dd7871d applied to timelineRenderer).
+    const safeDensity = density > 0 ? density : 1;
+    const step = 1 / safeDensity;
 
-    for (let b = startBeat; b <= maxBeat + step; b += step) {
+    // Integer bounds in "snap units" — one unit = 1/density beats.
+    const iStart = Math.floor(minBeat * safeDensity);
+    const iEnd = Math.ceil((maxBeat + step) * safeDensity);
+
+    for (let i = iStart; i <= iEnd; i++) {
+      const b = i / safeDensity;
       const y = UnrolledRenderer.beatToY(b, scrollBeat, pxPerBeat / BASE_PX_PER_BEAT, canvasHeight);
       if (y < 0 || y > canvasHeight) continue;
 
-      const isWholeBeat = Math.abs(b - Math.round(b)) < 0.001;
+      // Whole-beat check via integer modulo — exact, no ε fuzz needed.
+      const isWholeBeat = i % safeDensity === 0;
 
       ctx.strokeStyle = isWholeBeat
         ? "rgba(255, 255, 255, 0.22)"
@@ -369,36 +396,46 @@ export class UnrolledRenderer {
         ctx.font = "10px monospace";
         ctx.textAlign = "right";
         ctx.textBaseline = "middle";
-        ctx.fillText(Math.round(b).toString(), BEAT_GUTTER_WIDTH - 4, y);
+        // i / safeDensity is a whole integer when isWholeBeat — safe to render directly.
+        ctx.fillText((i / safeDensity).toString(), BEAT_GUTTER_WIDTH - 4, y);
       }
     }
   }
 
   private drawLaneGuides(
     ctx: CanvasRenderingContext2D,
-    lanes: number,
+    verticalLines: number,
     noteAreaLeft: number, noteAreaWidth: number,
     canvasHeight: number,
   ) {
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-    ctx.lineWidth = 0.5;
+    if (verticalLines < 2) return;
 
-    for (let i = 1; i < lanes; i++) {
-      const x = noteAreaLeft + (i / lanes) * noteAreaWidth;
+    // Draw lines at actual snap positions: i/(N-1) for i = 0..N-1
+    // Center line is emphasised ONLY when N is odd (X=0 is a real snap point)
+    const isOdd = Number.isInteger(verticalLines) && verticalLines % 2 === 1;
+    const centerIdx = (verticalLines - 1) / 2;
+
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < verticalLines; i++) {
+      const t = i / (verticalLines - 1);
+      const x = noteAreaLeft + t * noteAreaWidth;
+
+      if (i === 0 || i === verticalLines - 1) {
+        // Edge lines — slightly brighter than interior
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+      } else if (isOdd && i === centerIdx) {
+        // Center line — only when N is odd (real snap point at X=0)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+      } else {
+        // Regular interior grid line
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
+      }
+
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, canvasHeight);
       ctx.stroke();
     }
-
-    // Center lane (brighter)
-    const centerX = noteAreaLeft + noteAreaWidth / 2;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(centerX, 0);
-    ctx.lineTo(centerX, canvasHeight);
-    ctx.stroke();
   }
 
   /** Draw faint "ABOVE" / "BELOW" region labels at the top of the canvas */

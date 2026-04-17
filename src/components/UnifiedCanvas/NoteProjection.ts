@@ -209,7 +209,7 @@ export function projectClickToNote(
   canvasWidth: number,
   canvasHeight: number,
   density: number,
-  xSnapDivisions: number = 0, // 0 = no snap, >0 = snap to this many divisions
+  xSnapLines: number = 0, // 0 = no snap, >=2 = snap to this many vertical lines
 ): NotePlacementResult | null {
   // Step 1: Transform to line-local coordinates
   const local = screenToLineLocal(
@@ -233,7 +233,7 @@ export function projectClickToNote(
 
   // Step 3: Clamp and snap noteX
   const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
-  const x = xSnapDivisions > 0 ? snapX(rawX, xSnapDivisions) : Math.round(rawX);
+  const x = xSnapLines > 0 ? snapX(rawX, xSnapLines) : Math.round(rawX);
 
   return {
     beat,
@@ -266,7 +266,7 @@ export function computeGhostNote(
   canvasHeight: number,
   density: number,
   noteKind: string,
-  xSnapDivisions: number = 0, // 0 = no snap, >0 = snap to this many divisions
+  xSnapLines: number = 0, // 0 = no snap, >=2 = snap to this many vertical lines
 ): { beat: Beat; x: number; kind: string; above: boolean } | null {
   const result = projectClickToNote(
     mouseX, mouseY,
@@ -275,7 +275,7 @@ export function computeGhostNote(
     currentTime, bpmList,
     canvasWidth, canvasHeight,
     density,
-    xSnapDivisions, // Pass through
+    xSnapLines, // Pass through
   );
 
   if (!result) return null;

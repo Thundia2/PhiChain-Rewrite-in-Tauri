@@ -4,9 +4,7 @@
 // Registers all keyboard shortcuts using react-hotkeys-hook.
 // Call useGlobalHotkeys() once in App.tsx to activate them.
 //
-// Recent change: Delete key now deletes selected bookmarks.
-// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y now interleave chart and
-// bookmark undo/redo using shared sequence counters.
+// Recent change: Added F2 hotkey for inline tab rename.
 // ============================================================
 
 import { useEffect } from "react";
@@ -26,6 +24,7 @@ import { BpmList } from "../utils/bpmList";
 import { addMarkerAtCurrentBeat, seekToPrevBookmark, seekToNextBookmark } from "../utils/bookmarkNavigation";
 import type { EditorTool } from "../types/editor";
 import { useToastStore } from "../stores/toastStore";
+import { useContextPanelStore } from "../stores/contextPanelStore";
 
 export function useGlobalHotkeys(callbacks: {
   onNewChart?: () => void;
@@ -173,6 +172,22 @@ export function useGlobalHotkeys(callbacks: {
     }
   }, { preventDefault: true });
 
+  // ---- AI tab hotkey (Ctrl+Shift+A) — switch to AI tab in context panel ----
+  // Must be registered BEFORE ctrl+a so the modifier check takes priority
+  useHotkeys("ctrl+shift+a, meta+shift+a", () => {
+    if (!useSettingsStore.getState().aiEnabled) return;
+    const es = useEditorStore.getState();
+    const multiLen = es.multiSelectedLineIndices.length;
+    let mode: string;
+    if (multiLen > 1) mode = "multi";
+    else if (es.selectedEventIndices.length > 0) mode = "event";
+    else if (es.selectedNoteIndices.length > 0) mode = "note";
+    else if (es.selectedLineIndex !== null) mode = "line";
+    else mode = "global";
+    useContextPanelStore.getState().setActiveTab(mode, "ai");
+    useContextPanelStore.getState().setCollapsed(false);
+  }, { preventDefault: true });
+
   // ---- Select all notes on current line ----
   useHotkeys("ctrl+a, meta+a", () => {
     const es = useEditorStore.getState();
@@ -255,7 +270,8 @@ export function useGlobalHotkeys(callbacks: {
     const line = cs.chart.lines[es.selectedLineIndex];
     if (!line) return;
 
-    const xStep = Math.round(CANVAS_WIDTH / es.lanes);
+    const xStep = es.verticalLines >= 2 ? Math.round(CANVAS_WIDTH / (es.verticalLines - 1)) : 0;
+    if (xStep === 0) return;
     cs.batchEditNotes(es.selectedLineIndex,
       es.selectedNoteIndices.map((idx) => ({
         noteIndex: idx,
@@ -272,7 +288,8 @@ export function useGlobalHotkeys(callbacks: {
     const line = cs.chart.lines[es.selectedLineIndex];
     if (!line) return;
 
-    const xStep = Math.round(CANVAS_WIDTH / es.lanes);
+    const xStep = es.verticalLines >= 2 ? Math.round(CANVAS_WIDTH / (es.verticalLines - 1)) : 0;
+    if (xStep === 0) return;
     cs.batchEditNotes(es.selectedLineIndex,
       es.selectedNoteIndices.map((idx) => ({
         noteIndex: idx,
@@ -337,6 +354,11 @@ export function useGlobalHotkeys(callbacks: {
   // ---- Command palette ----
   useHotkeys("ctrl+k, meta+k", () => {
     callbacks.onCommandPalette?.();
+  }, { preventDefault: true });
+
+  // ---- Rename active tab ----
+  useHotkeys("f2", () => {
+    useTabStore.getState().startRenameTab();
   }, { preventDefault: true });
 
   // ---- Import chart ----

@@ -6,46 +6,26 @@
 // item has a label, optional shortcut hint, and an action
 // closure that calls the appropriate store methods. The hook
 // accepts callback props for dialogs and panel toggles.
+//
+// Recent change: Added "Rename Tab" (F2) to View menu for
+// inline tab renaming via command palette or keyboard shortcut.
 // ============================================================
 
-import type JSZip from "jszip";
 import { useChartStore } from "../stores/chartStore";
 import { useTabStore } from "../stores/tabStore";
 import { useAudioStore } from "../stores/audioStore";
-import { audioEngine } from "../audio/audioEngine";
 import { saveProject } from "../utils/ipc";
 import type { ExtraConfig } from "../types/extra";
 import type { PanelId } from "../types/editor";
 import { useEditorStore } from "../stores/editorStore";
 import { useGroupStore } from "../stores/groupStore";
 import { useBookmarkStore } from "../stores/bookmarkStore";
-import { useRecentProjectsStore } from "../stores/recentProjectsStore";
 import { useToastStore } from "../stores/toastStore";
-import { saveStoredProject } from "../utils/projectStorage";
 import { showConfirm } from "../components/common/ConfirmDialog";
 import { beatToFloat, floatToBeat } from "../types/chart";
 import { BpmList } from "../utils/bpmList";
 import { evaluateEasing } from "../canvas/easings";
-
-/**
- * Search a ZIP archive for an entry whose basename (filename without path)
- * matches the target name, case-insensitively. Returns the first match or null.
- * Used to locate the exact audio/illustration file specified by RPE META fields
- * even when the ZIP contains multiple files with the same extension.
- */
-function findZipEntryByBasename(
-  zip: JSZip,
-  targetName: string,
-): JSZip.JSZipObject | null {
-  const target = targetName.toLowerCase();
-  let found: JSZip.JSZipObject | null = null;
-  zip.forEach((relativePath, entry) => {
-    if (found || entry.dir) return;
-    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
-    if (baseName === target) found = entry;
-  });
-  return found;
-}
+import { triggerImportChart } from "../utils/importChart";
 
 /** Helper to pick a file via a temporary input element. Returns null if cancelled. */
 export function pickFile(accept: string): Promise<File | null> {
@@ -127,347 +107,8 @@ export function useMenus(
         { label: "Close Project", disabled: !isLoaded, action: closeProject },
         { separator: true, label: "" },
         {
-          label: "Import RPE Chart...",
-          action: () => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".json,.zip,.pez";
-            input.onchange = async () => {
-              const file = input.files?.[0];
-              if (!file) return;
-              try {
-                let chartText: string;
-                let musicBlob: Blob | null = null;
-                let musicExt: string | null = null;
-                let illustrationBlob: Blob | null = null;
-                let extraJson: string | null = null;
-                let groupsJson: string | null = null;
-                let bookmarksJson: string | null = null;
-                let fontEntry: JSZip.JSZipObject | null = null;
-                let infoYmlEntry: JSZip.JSZipObject | null = null;
-                let zip: JSZip | null = null;
-
-                if (file.name.toLowerCase().endsWith(".zip") || file.name.toLowerCase().endsWith(".pez")) {
-                  const { default: JSZipLib } = await import("jszip");
-                  const zipData = await file.arrayBuffer();
-                  zip = await JSZipLib.loadAsync(zipData);
-
-                  let chartEntry: JSZip.JSZipObject | null = null;
-                  let audioEntry: JSZip.JSZipObject | null = null;
-                  let imageEntry: JSZip.JSZipObject | null = null;
-                  let extraEntry: JSZip.JSZipObject | null = null;
-                  let groupsEntry: JSZip.JSZipObject | null = null;
-                  let bookmarksEntry: JSZip.JSZipObject | null = null;
-
-                  zip.forEach((relativePath, entry) => {
-                    if (entry.dir) return;
-                    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
-                    const pathLower = relativePath.toLowerCase();
-                    if ((baseName === "info.yml" || baseName === "info.yaml") && !infoYmlEntry) {
-                      infoYmlEntry = entry;
-                    } else if (
-                      (pathLower === "canvas/groups.json" || baseName === "groups.json") &&
-                      !groupsEntry
-                    ) {
-                      groupsEntry = entry;
-                    } else if (
-                      pathLower === "canvas/bookmarks.json" && !bookmarksEntry
-                    ) {
-                      bookmarksEntry = entry;
-                    } else if (baseName === "extra.json" && !extraEntry) {
-                      extraEntry = entry;
-                    } else if (baseName.endsWith(".json") && !chartEntry) {
-                      chartEntry = entry;
-                    } else if (/\.(mp3|ogg|wav|flac|m4a)$/.test(baseName) && !audioEntry) {
-                      audioEntry = entry;
-                      musicExt = baseName.split(".").pop() ?? "mp3";
-                    } else if (/\.(jpg|jpeg|png|webp)$/.test(baseName) && !imageEntry) {
-                      imageEntry = entry;
-                    } else if (/\.(otf|ttf|woff|woff2)$/.test(baseName) && !fontEntry) {
-                      fontEntry = entry;
-                    }
-                  });
-
-                  if (!chartEntry) {
-                    throw new Error("No .json chart file found in the zip archive.");
-                  }
-                  chartText = await (chartEntry as JSZip.JSZipObject).async("string");
-
-                  if (audioEntry) {
-                    musicBlob = await (audioEntry as JSZip.JSZipObject).async("blob");
-                  }
-                  if (imageEntry) {
-                    illustrationBlob = await (imageEntry as JSZip.JSZipObject).async("blob");
-                  }
-                  if (extraEntry) {
-                    extraJson = await (extraEntry as JSZip.JSZipObject).async("string");
-                  }
-                  if (groupsEntry) {
-                    groupsJson = await (groupsEntry as JSZip.JSZipObject).async("string");
-                  }
-                  if (bookmarksEntry) {
-                    bookmarksJson = await (bookmarksEntry as JSZip.JSZipObject).async("string");
-                  }
-                } else {
-                  chartText = await file.text();
-                }
-
-                const { convertRpeToPhichain, extractRpeMeta } = await import("../utils/rpeImport");
-                const chart = convertRpeToPhichain(chartText);
-                const meta = extractRpeMeta(chartText);
-
-                // Override audio/illustration with the exact files specified by RPE META.
-                // The initial ZIP scan picks the first audio/image file it encounters,
-                // which may be a sound effect (e.g. drag hit sound) instead of the song.
-                if (zip && meta.rpe_song) {
-                  const metaAudio = findZipEntryByBasename(zip, meta.rpe_song);
-                  if (metaAudio) {
-                    musicBlob = await metaAudio.async("blob");
-                    musicExt = meta.rpe_song.split(".").pop()?.toLowerCase() ?? "mp3";
-                  }
-                }
-                if (zip && meta.rpe_background) {
-                  const metaImage = findZipEntryByBasename(zip, meta.rpe_background);
-                  if (metaImage) {
-                    illustrationBlob = await metaImage.async("blob");
-                  }
-                }
-
-                // Parse info.yml if present (Phira extended metadata)
-                if (infoYmlEntry) {
-                  try {
-                    const { parsePhiraInfoYml } = await import("../utils/infoYmlParser");
-                    const infoYmlText = await (infoYmlEntry as JSZip.JSZipObject).async("string");
-                    const phiraMeta = parsePhiraInfoYml(infoYmlText);
-                    Object.assign(meta, phiraMeta);
-                  } catch { /* ignore invalid info.yml */ }
-                }
-
-                const cs = useChartStore.getState();
-
-                cs.loadFromProjectData({
-                  project_path: "",
-                  music_path: null,
-                  illustration_path: null,
-                  meta,
-                  chart_json: JSON.stringify(chart),
-                });
-
-                if (musicBlob && musicExt) {
-                  const musicUrl = URL.createObjectURL(musicBlob);
-                  await audioEngine.load(musicUrl, musicExt);
-                  useAudioStore.getState().setMusicLoaded(true);
-                  // Track the blob URL + format so tab session restore can reuse it
-                  const { setAudioBlobUrl } = await import("../utils/chartSessions");
-                  setAudioBlobUrl(musicUrl, musicExt);
-                }
-
-                if (illustrationBlob) {
-                  const illustrationUrl = URL.createObjectURL(illustrationBlob);
-                  await cs.loadIllustration(illustrationUrl);
-                }
-
-                if (extraJson) {
-                  try {
-                    cs.setExtraConfig(JSON.parse(extraJson) as ExtraConfig);
-                  } catch { /* ignore invalid extra.json */ }
-                }
-
-                if (groupsJson) {
-                  try {
-                    useGroupStore.getState().loadGroupsJson(groupsJson);
-                  } catch { /* ignore invalid groups.json */ }
-                }
-
-                if (bookmarksJson) {
-                  try {
-                    useBookmarkStore.getState().loadBookmarksJson(bookmarksJson);
-                  } catch { /* ignore invalid bookmarks.json */ }
-                }
-
-                if (fontEntry) {
-                  try {
-                    const fontBlob = await (fontEntry as JSZip.JSZipObject).async("blob");
-                    const fontUrl = URL.createObjectURL(fontBlob);
-                    const fontFace = new FontFace("ChartCustomFont", `url(${fontUrl})`);
-                    await fontFace.load();
-                    document.fonts.add(fontFace);
-                    cs.setChartFontFamily("ChartCustomFont");
-                  } catch (e) {
-                    console.warn("Failed to load chart font:", e);
-                  }
-                }
-
-                if (file.name.toLowerCase().endsWith(".zip") || file.name.toLowerCase().endsWith(".pez")) {
-                  const textureNames = new Set<string>();
-                  for (const line of chart.lines) {
-                    if (line.texture && line.texture !== "line.png") {
-                      textureNames.add(line.texture);
-                    }
-                  }
-                  if (textureNames.size > 0) {
-                    const { default: JSZipLib2 } = await import("jszip");
-                    const zip2 = await JSZipLib2.loadAsync(await file.arrayBuffer());
-                    for (const texName of textureNames) {
-                      let texEntry: JSZip.JSZipObject | null = null;
-                      zip2.forEach((relativePath, entry) => {
-                        if (entry.dir) return;
-                        const baseName = relativePath.split("/").pop() ?? "";
-                        if (baseName === texName && !texEntry) {
-                          texEntry = entry;
-                        }
-                      });
-                      if (texEntry) {
-                        const texBlob = await (texEntry as JSZip.JSZipObject).async("blob");
-                        cs.setLineTexture(texName, texBlob);
-                      }
-                    }
-                  }
-                }
-
-                let totalNotes = 0;
-                for (const line of chart.lines) totalNotes += line.notes?.length ?? 0;
-                const projectId = crypto.randomUUID();
-                await saveStoredProject({
-                  id: projectId,
-                  chartJson: JSON.stringify(chart),
-                  meta,
-                  audioBlob: musicBlob ? await musicBlob.arrayBuffer() : null,
-                  audioExt: musicExt ?? null,
-                  // Save illustration blob so it persists across app restarts
-                  illustrationBlob: illustrationBlob ? await illustrationBlob.arrayBuffer() : null,
-                  savedAt: Date.now(),
-                });
-                useRecentProjectsStore.getState().addRecent({
-                  id: projectId,
-                  name: meta.name || file.name.replace(/\.(json|zip|pez)$/i, ""),
-                  composer: meta.composer || "",
-                  level: meta.level || "",
-                  lineCount: chart.lines.length,
-                  noteCount: totalNotes,
-                  importType: "rpe",
-                });
-
-                useTabStore.getState().openChart("rpe-import", meta.name || "Imported RPE Chart");
-              } catch (e) {
-                console.error("RPE import failed:", e);
-                useToastStore.getState().addToast({ message: "Failed to import RPE chart. Check the console for details.", type: "error" });
-              }
-            };
-            input.click();
-          },
-        },
-        {
-          label: "Import PEC Chart...",
-          action: () => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".pec,.txt";
-            input.onchange = async () => {
-              const file = input.files?.[0];
-              if (!file) return;
-              try {
-                const pecText = await file.text();
-                const { convertPecToPhichain } = await import("../utils/pecImport");
-                const chart = convertPecToPhichain(pecText);
-                const cs = useChartStore.getState();
-
-                cs.loadFromProjectData({
-                  project_path: "",
-                  music_path: null,
-                  illustration_path: null,
-                  meta: { name: file.name.replace(/\.(pec|txt)$/i, ""), composer: "", charter: "", illustrator: "", level: "" },
-                  chart_json: JSON.stringify(chart),
-                });
-
-                const chartName = file.name.replace(/\.(pec|txt)$/i, "");
-                const pecMeta = { name: chartName, composer: "", charter: "", illustrator: "", level: "" };
-                let totalNotes = 0;
-                for (const line of chart.lines) totalNotes += line.notes?.length ?? 0;
-                const projectId = crypto.randomUUID();
-                await saveStoredProject({
-                  id: projectId,
-                  chartJson: JSON.stringify(chart),
-                  meta: pecMeta,
-                  audioBlob: null,
-                  audioExt: null,
-                  illustrationBlob: null, // PEC format has no bundled illustration
-                  savedAt: Date.now(),
-                });
-                useRecentProjectsStore.getState().addRecent({
-                  id: projectId,
-                  name: chartName,
-                  composer: "",
-                  level: "",
-                  lineCount: chart.lines.length,
-                  noteCount: totalNotes,
-                  importType: "pec",
-                });
-
-                useTabStore.getState().openChart("pec-import", chartName || "Imported PEC Chart");
-              } catch (e) {
-                console.error("PEC import failed:", e);
-                useToastStore.getState().addToast({ message: "Failed to import PEC chart. Check the console for details.", type: "error" });
-              }
-            };
-            input.click();
-          },
-        },
-        {
-          label: "Import Official Chart...",
-          action: () => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".json";
-            input.onchange = async () => {
-              const file = input.files?.[0];
-              if (!file) return;
-              try {
-                const jsonText = await file.text();
-                const { convertOfficialToPhichain } = await import("../utils/officialImport");
-                const chart = convertOfficialToPhichain(jsonText);
-                const cs = useChartStore.getState();
-
-                cs.loadFromProjectData({
-                  project_path: "",
-                  music_path: null,
-                  illustration_path: null,
-                  meta: { name: file.name.replace(/\.json$/i, ""), composer: "", charter: "", illustrator: "", level: "" },
-                  chart_json: JSON.stringify(chart),
-                });
-
-                const chartName = file.name.replace(/\.json$/i, "");
-                const officialMeta = { name: chartName, composer: "", charter: "", illustrator: "", level: "" };
-                let totalNotes = 0;
-                for (const line of chart.lines) totalNotes += line.notes?.length ?? 0;
-                const projectId = crypto.randomUUID();
-                await saveStoredProject({
-                  id: projectId,
-                  chartJson: JSON.stringify(chart),
-                  meta: officialMeta,
-                  audioBlob: null,
-                  audioExt: null,
-                  illustrationBlob: null, // Official format has no bundled illustration
-                  savedAt: Date.now(),
-                });
-                useRecentProjectsStore.getState().addRecent({
-                  id: projectId,
-                  name: chartName,
-                  composer: "",
-                  level: "",
-                  lineCount: chart.lines.length,
-                  noteCount: totalNotes,
-                  importType: "official",
-                });
-
-                useTabStore.getState().openChart("official-import", chartName || "Imported Official Chart");
-              } catch (e) {
-                console.error("Official chart import failed:", e);
-                useToastStore.getState().addToast({ message: "Failed to import Official chart. Check the console for details.", type: "error" });
-              }
-            };
-            input.click();
-          },
+          label: "Import Chart...",
+          action: () => triggerImportChart(),
         },
         {
           label: "Import extra.json...",
@@ -713,6 +354,14 @@ export function useMenus(
                 closable: true,
               });
             }
+          },
+        },
+        { separator: true, label: "" },
+        {
+          label: "Rename Tab",
+          shortcut: "F2",
+          action: () => {
+            useTabStore.getState().startRenameTab();
           },
         },
         { separator: true, label: "" },

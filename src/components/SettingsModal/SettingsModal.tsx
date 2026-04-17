@@ -19,8 +19,9 @@ import { useToastStore } from "../../stores/toastStore";
 import { ToggleSwitch } from "../Settings/ToggleSwitch";
 import { Card, SectionHeader as SH, ActionButton } from "../common/UIKit";
 import { LatencyCalibration } from "./LatencyCalibration";
+import { AI_SYSTEM_PROMPT } from "../../utils/aiSystemPrompt";
 
-type Category = "general" | "audio" | "game-preview" | "timeline" | "editor" | "resource-pack" | "notifications";
+type Category = "general" | "audio" | "game-preview" | "timeline" | "editor" | "ai" | "resource-pack" | "notifications";
 
 const CATEGORIES: { id: Category; label: string }[] = [
   { id: "general", label: "General" },
@@ -28,6 +29,7 @@ const CATEGORIES: { id: Category; label: string }[] = [
   { id: "game-preview", label: "Game Preview" },
   { id: "timeline", label: "Timeline" },
   { id: "editor", label: "Editor" },
+  { id: "ai", label: "AI Generation" },
   { id: "resource-pack", label: "Resource Pack" },
   { id: "notifications", label: "Notifications" },
 ];
@@ -253,6 +255,12 @@ function GamePreviewContent() {
     <div>
       <SectionHeader>Visuals</SectionHeader>
       <Card>
+        <CardRow label="GPU renderer (experimental, on hold)" description="Use PixiJS WebGL for faster rendering on big charts. Requires restart. Still undergoing testing.">
+          <ToggleSwitch
+            checked={settings.usePixiRenderer}
+            onChange={(v) => update({ usePixiRenderer: v })}
+          />
+        </CardRow>
         <CardRow label="Hit animations" description="Particle effects when notes are hit">
           <ToggleSwitch
             checked={settings.showHitEffects}
@@ -399,6 +407,31 @@ function EditorContent() {
         </Card>
       </div>
       <div>
+        <SectionHeader>Tab Bar</SectionHeader>
+        <Card>
+          <CardRow label="Tab height" description="Height of editor tab buttons in pixels">
+            <Slider
+              value={settings.tabHeight}
+              min={24}
+              max={48}
+              step={2}
+              onChange={(v) => update({ tabHeight: v })}
+              format={(v) => `${v}px`}
+            />
+          </CardRow>
+          <CardRow label="Tab max width" description="Maximum width of each tab button" last>
+            <Slider
+              value={settings.tabMaxWidth}
+              min={120}
+              max={400}
+              step={10}
+              onChange={(v) => update({ tabMaxWidth: v })}
+              format={(v) => `${v}px`}
+            />
+          </CardRow>
+        </Card>
+      </div>
+      <div>
         <SectionHeader>Line Strip</SectionHeader>
         <Card>
           <CardRow label="Note inactivity timeout" description="Demote lines to inactive when no note arrives within this window (0 = disabled)" last>
@@ -448,6 +481,315 @@ function EditorContent() {
           </CardRow>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function AiContent() {
+  const settings = useSettingsStore();
+  const update = settings.updateSettings;
+  const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+  const [testError, setTestError] = useState("");
+
+  const isRemote = settings.aiMode === "remote";
+
+  // Switch mode and apply sensible presets so the user doesn't have to reconfigure everything
+  const handleModeChange = (mode: string) => {
+    if (mode === "local") {
+      update({ aiMode: "local" as const, aiEndpoint: "http://localhost:11434", aiModel: "gemma4:27b", aiApiKey: "" });
+    } else {
+      update({ aiMode: "remote" as const, aiEndpoint: "https://generativelanguage.googleapis.com/v1beta/openai", aiModel: "gemma-3-27b-it" });
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTestStatus("testing");
+    setTestError("");
+    try {
+      const { generateAi } = await import("../../utils/ipc");
+      await generateAi({
+        endpoint: settings.aiEndpoint,
+        model: settings.aiModel,
+        messages: [{ role: "user", content: "Say OK" }],
+        temperature: 0.0,
+        maxTokens: 10,
+        apiKey: settings.aiApiKey || undefined,
+      });
+      setTestStatus("success");
+    } catch (err) {
+      setTestStatus("error");
+      setTestError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <SectionHeader>AI Generation</SectionHeader>
+        <Card>
+          <CardRow label="Enable AI generation" description="Adds an AI tab to the context panel for natural language chart generation">
+            <ToggleSwitch
+              checked={settings.aiEnabled}
+              onChange={(v) => update({ aiEnabled: v })}
+            />
+          </CardRow>
+          <CardRow label="Server mode" description="Local runs your own model. Remote uses a cloud API with an API key.">
+            <SegmentedControl
+              value={settings.aiMode}
+              options={[
+                { value: "remote", label: "Remote API" },
+                { value: "local", label: "Local Server" },
+              ]}
+              onChange={handleModeChange}
+            />
+          </CardRow>
+        </Card>
+      </div>
+
+      <div>
+        <SectionHeader>{isRemote ? "Remote API" : "Local Server"}</SectionHeader>
+        <Card>
+          <CardRow label="Endpoint URL" description={isRemote ? "OpenAI-compatible API base URL" : "Local server URL (Ollama, vLLM, llama.cpp)"}>
+            <input
+              type="text"
+              value={settings.aiEndpoint}
+              onChange={(e) => update({ aiEndpoint: e.target.value })}
+              placeholder={isRemote ? "https://generativelanguage.googleapis.com/v1beta/openai" : "http://localhost:11434"}
+              style={{
+                width: 200,
+                padding: "4px 8px",
+                borderRadius: 5,
+                fontSize: 10,
+                backgroundColor: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                border: "0.5px solid var(--border-color)",
+                fontFamily: "monospace",
+              }}
+            />
+          </CardRow>
+          <CardRow label="Model" description={isRemote ? "API model ID (e.g. gemma-3-27b-it)" : "Ollama model name (e.g. gemma4:27b)"}>
+            <input
+              type="text"
+              value={settings.aiModel}
+              onChange={(e) => update({ aiModel: e.target.value })}
+              placeholder={isRemote ? "gemma-3-27b-it" : "gemma4:27b"}
+              style={{
+                width: 140,
+                padding: "4px 8px",
+                borderRadius: 5,
+                fontSize: 11,
+                backgroundColor: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                border: "0.5px solid var(--border-color)",
+                fontFamily: "monospace",
+              }}
+            />
+          </CardRow>
+          {isRemote && (
+            <CardRow label="API key" description="Bearer token for the remote API">
+              <input
+                type="password"
+                value={settings.aiApiKey}
+                onChange={(e) => update({ aiApiKey: e.target.value })}
+                placeholder="Paste your API key"
+                style={{
+                  width: 180,
+                  padding: "4px 8px",
+                  borderRadius: 5,
+                  fontSize: 11,
+                  backgroundColor: "var(--bg-secondary)",
+                  color: "var(--text-primary)",
+                  border: settings.aiApiKey ? "0.5px solid var(--border-color)" : "0.5px solid rgba(255, 74, 106, 0.4)",
+                  fontFamily: "monospace",
+                }}
+              />
+            </CardRow>
+          )}
+          <CardRow label="Temperature" description="Lower = more deterministic, higher = more creative">
+            <Slider
+              value={settings.aiTemperature}
+              min={0} max={1} step={0.05}
+              onChange={(v) => update({ aiTemperature: v })}
+              format={(v) => v.toFixed(2)}
+            />
+          </CardRow>
+          <CardRow label="Max tokens" description="Maximum response length" last>
+            <input
+              type="number"
+              value={settings.aiMaxTokens}
+              min={512}
+              max={16384}
+              step={256}
+              onChange={(e) => update({ aiMaxTokens: Math.max(512, parseInt(e.target.value) || 4096) })}
+              style={{
+                width: 70,
+                padding: "3px 6px",
+                borderRadius: 4,
+                fontSize: 11,
+                backgroundColor: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                border: "0.5px solid var(--border-color)",
+                textAlign: "right",
+              }}
+            />
+          </CardRow>
+        </Card>
+      </div>
+
+      <div>
+        <SectionHeader>Connection Test</SectionHeader>
+        <Card>
+          <div style={{ padding: "12px 14px" }}>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleTestConnection}
+                disabled={testStatus === "testing"}
+                style={{
+                  padding: "5px 14px",
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  border: "none",
+                  cursor: testStatus === "testing" ? "wait" : "pointer",
+                  backgroundColor: "var(--accent-primary)",
+                  color: "#fff",
+                  opacity: testStatus === "testing" ? 0.6 : 1,
+                  transition: "opacity 0.15s",
+                }}
+              >
+                {testStatus === "testing" ? "Testing..." : "Test Connection"}
+              </button>
+              {testStatus === "success" && (
+                <span style={{ fontSize: 11, color: "#4aff7a" }}>Connected successfully</span>
+              )}
+              {testStatus === "error" && (
+                <span style={{ fontSize: 11, color: "#ff4a6a" }}>Connection failed</span>
+              )}
+            </div>
+            {testStatus === "error" && testError && (
+              <div style={{
+                marginTop: 8,
+                padding: "6px 10px",
+                borderRadius: 4,
+                fontSize: 10,
+                color: "#ff4a6a",
+                backgroundColor: "rgba(255, 74, 106, 0.08)",
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}>
+                {testError}
+              </div>
+            )}
+            {isRemote && !settings.aiApiKey && (
+              <div style={{ marginTop: 8, fontSize: 10, color: "#ffb74d", lineHeight: 1.5 }}>
+                No API key set. Remote APIs require an API key to authenticate.
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* ---- System Prompt ---- */}
+      <AiPromptEditor />
+    </div>
+  );
+}
+
+/** Collapsible built-in prompt viewer + editable custom instructions textarea */
+function AiPromptEditor() {
+  const settings = useSettingsStore();
+  const update = settings.updateSettings;
+  const [builtInExpanded, setBuiltInExpanded] = useState(false);
+
+  return (
+    <div>
+      <SectionHeader>System Prompt</SectionHeader>
+      <Card>
+        {/* Built-in prompt viewer (read-only, collapsible) */}
+        <div style={{ borderBottom: "1px solid rgba(42, 42, 53, 0.55)" }}>
+          <button
+            onClick={() => setBuiltInExpanded(!builtInExpanded)}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "10px 14px",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--text-primary)",
+              fontSize: 12,
+              fontFamily: "inherit",
+            }}
+          >
+            <span>Built-in prompt</span>
+            <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+              {builtInExpanded ? "HIDE" : "VIEW"} ({AI_SYSTEM_PROMPT.length} chars)
+            </span>
+          </button>
+          {builtInExpanded && (
+            <pre style={{
+              padding: "8px 14px 12px",
+              margin: 0,
+              fontSize: 9,
+              fontFamily: "monospace",
+              color: "var(--text-secondary)",
+              lineHeight: 1.45,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 250,
+              overflowY: "auto",
+              borderTop: "1px solid rgba(42, 42, 53, 0.55)",
+              backgroundColor: "rgba(0,0,0,0.15)",
+            }}>
+              {AI_SYSTEM_PROMPT}
+            </pre>
+          )}
+        </div>
+
+        {/* Custom instructions textarea */}
+        <div style={{ padding: "10px 14px" }}>
+          <div style={{ fontSize: 12, color: "var(--text-primary)", marginBottom: 4 }}>
+            Additional instructions
+          </div>
+          <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 8, lineHeight: 1.5 }}>
+            Appended after the built-in prompt. Use this to customize AI behavior without modifying source code.
+          </div>
+          <textarea
+            value={settings.aiCustomPrompt}
+            onChange={(e) => update({ aiCustomPrompt: e.target.value })}
+            placeholder="e.g., Always use ease_out_cubic for opacity transitions. Prefer drag notes over tap notes for fast sections."
+            rows={4}
+            style={{
+              width: "100%",
+              padding: "8px 10px",
+              borderRadius: 5,
+              fontSize: 11,
+              fontFamily: "monospace",
+              backgroundColor: "var(--bg-secondary)",
+              color: "var(--text-primary)",
+              border: "0.5px solid var(--border-color)",
+              lineHeight: 1.5,
+              resize: "vertical",
+              minHeight: 60,
+              maxHeight: 200,
+              outline: "none",
+            }}
+          />
+          {settings.aiCustomPrompt && (
+            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+              <ActionButton variant="danger" onClick={() => update({ aiCustomPrompt: "" })}>
+                Reset to Default
+              </ActionButton>
+              <span style={{ fontSize: 9, color: "var(--text-muted)" }}>
+                {settings.aiCustomPrompt.length} chars
+              </span>
+            </div>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
@@ -626,6 +968,8 @@ export function SettingsModal({
         return <TimelineContent />;
       case "editor":
         return <EditorContent />;
+      case "ai":
+        return <AiContent />;
       case "resource-pack":
         return <ResourcePackContent />;
       case "notifications":

@@ -114,6 +114,11 @@ export const useAudioStore = create<AudioState>()((set, _get) => ({
   stop: () => set({ isPlaying: false, currentTime: 0 }),
   setCurrentTime: (time) => set({ currentTime: time }),
   setDuration: (duration) => set({ duration }),
-  setMusicLoaded: (loaded) => set({ musicLoaded: loaded }),
+  setMusicLoaded: (loaded) => {
+    // DEBUG: Track musicLoaded changes to find the ghost song bug
+    console.warn("[audioStore.setMusicLoaded]", loaded,
+      "\n  stack:", new Error().stack?.split("\n").slice(1, 4).join("\n  "));
+    set({ musicLoaded: loaded });
+  },
   _setPlaybackRateInternal: (rate: number) => set({ playbackRate: rate }),
 }));

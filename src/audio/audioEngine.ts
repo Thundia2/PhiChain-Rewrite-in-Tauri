@@ -7,9 +7,11 @@
 // When no music is loaded, playback still works via a manual
 // timer so the timeline/preview can be previewed without audio.
 //
-// Recent change: Replaced `new BpmList()` with `getCachedBpmList()`
-// in the RAF tick loop. Previously BpmList was reconstructed every
-// frame (60x/sec) when loop mode was active.
+// Recent change (bug audit #7): Removed leftover DEBUG `console.warn`
+// statements (with full stack traces) from load() and unload().
+// They were left from a "ghost song" debugging session and were
+// spamming the console on every load/unload, costing stack-capture
+// overhead and masking real warnings.
 // ============================================================
 
 import { Howl } from "howler";

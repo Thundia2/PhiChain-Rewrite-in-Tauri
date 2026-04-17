@@ -42,7 +42,7 @@ export interface EditorState {
   // ---- Timeline settings ----
   timelineZoom: number;
   density: number; // Beat grid subdivision (e.g., 4 = quarter-beat grid)
-  lanes: number; // Number of vertical lane guides
+  verticalLines: number; // Number of vertical grid lines (RPE convention: N = line count, not division count)
   noteSideFilter: NoteSideFilter;
   showSpectrogram: boolean;
   spectrogramOpacity: number;
@@ -224,7 +224,7 @@ export interface EditorState {
   // ---- Timeline actions ----
   setTimelineZoom: (zoom: number) => void;
   setDensity: (density: number) => void;
-  setLanes: (lanes: number) => void;
+  setVerticalLines: (n: number) => void;
   setNoteSideFilter: (filter: NoteSideFilter) => void;
   setShowSpectrogram: (show: boolean) => void;
   setSpectrogramOpacity: (opacity: number) => void;
@@ -372,7 +372,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
   activeTool: "select",
   timelineZoom: 1.0,
   density: 4,
-  lanes: 9,
+  verticalLines: 21,
   noteSideFilter: "all",
   showSpectrogram: false,
   spectrogramOpacity: 0.5,
@@ -470,7 +470,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
   lineVisibility: {},
   lineLocked: {},
   lineDrawerOpen: false,
-  unifiedInspectorOpen: true,
+  unifiedInspectorOpen: false,
   canvasActivePanelId: null,
   canvasPanelHeight: 250,
   onDemandOverlayPanelId: null,
@@ -540,8 +540,8 @@ export const useEditorStore = create<EditorState>()((set) => ({
   setDensity: (density) =>
     set({ density: Math.max(1, Math.min(32, density)) }),
 
-  setLanes: (lanes) =>
-    set({ lanes: Math.max(1, Math.min(32, lanes)) }),
+  setVerticalLines: (n) =>
+    set({ verticalLines: Math.max(2, Math.min(256, n)) }),
 
   setNoteSideFilter: (filter) => set({ noteSideFilter: filter }),
 
