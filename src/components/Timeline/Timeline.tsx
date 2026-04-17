@@ -63,7 +63,7 @@ export function Timeline() {
   // Subscribe to trigger re-renders when these change (used in render loop via getState)
   void useEditorStore((s) => s.timelineZoom);
   void useEditorStore((s) => s.density);
-  void useEditorStore((s) => s.lanes);
+  void useEditorStore((s) => s.verticalLines);
   void useEditorStore((s) => s.noteSideFilter);
   void useEditorStore((s) => s.selectedNoteIndices);
   const audioDuration = useAudioStore((s) => s.duration);
@@ -193,7 +193,7 @@ export function Timeline() {
         currentBeat,
         zoom: es.timelineZoom,
         density: es.density,
-        lanes: es.lanes,
+        verticalLines: es.verticalLines,
         noteSideFilter: es.noteSideFilter,
         selectedNoteIndices: es.selectedNoteIndices,
         scrollBeat: scrollBeatRef.current,
@@ -220,19 +220,30 @@ export function Timeline() {
   maxBeatRef.current = maxBeat;
 
   // ---- Scroll handling ----
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      const delta = -e.deltaY * 0.002;
-      const es = useEditorStore.getState();
-      useEditorStore.getState().setTimelineZoom(es.timelineZoom + delta);
-    } else {
-      const invert = useSettingsStore.getState().invertScrollDirection;
-      const pxPerBeat = BASE_PX_PER_BEAT * useEditorStore.getState().timelineZoom;
-      const rawDelta = e.deltaY / pxPerBeat;
-      const beatDelta = invert ? -rawDelta : rawDelta;
-      setScrollBeat((prev) => Math.max(0, Math.min(prev + beatDelta, maxBeatRef.current)));
-    }
+  // Uses addEventListener with { passive: false } instead of React's onWheel
+  // prop, which registers as passive in modern browsers and causes
+  // "Unable to preventDefault inside passive event listener" console warnings.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const delta = -e.deltaY * 0.002;
+        const es = useEditorStore.getState();
+        useEditorStore.getState().setTimelineZoom(es.timelineZoom + delta);
+      } else {
+        const invert = useSettingsStore.getState().invertScrollDirection;
+        const pxPerBeat = BASE_PX_PER_BEAT * useEditorStore.getState().timelineZoom;
+        const rawDelta = e.deltaY / pxPerBeat;
+        const beatDelta = invert ? -rawDelta : rawDelta;
+        setScrollBeat((prev) => Math.max(0, Math.min(prev + beatDelta, maxBeatRef.current)));
+      }
+    };
+
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
   }, []);
 
   // ---- Mouse down (start drag selection or click) ----
@@ -488,7 +499,6 @@ export function Timeline() {
       <canvas
         ref={canvasRef}
         className="absolute inset-0"
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

@@ -13,7 +13,7 @@ import { audioEngine } from "./audio/audioEngine";
 import { initAutosave } from "./utils/autosave";
 import { restoreAppState, saveAppState, saveAppStateDebounced } from "./utils/appState";
 import { loadProject, isTauri } from "./utils/ipc";
-import { registerSession, setSkipNextRestore, setAudioBlobUrl } from "./utils/chartSessions";
+import { registerSession, setSkipNextRestore, setAudioBlobUrl, setStoredProjectId } from "./utils/chartSessions";
 
 // ---- 1. Load settings from disk (async, non-blocking) ----
 useSettingsStore.getState().loadSettings();
@@ -39,6 +39,12 @@ restoreAppState()
         const data = await loadProject(lastProjectPath);
         const cs = useChartStore.getState();
         cs.loadFromProjectData(data);
+
+        // Bug audit #4: disk projects are reloaded via musicPath, not
+        // IndexedDB — clear the stored-project-id tracker so
+        // chartSessions doesn't try to rematerialize from IndexedDB
+        // if this session's blob URL ever dies.
+        setStoredProjectId(null);
 
         // Load music if available (read from disk → blob URL)
         if (data.music_path) {
@@ -95,7 +101,7 @@ useEditorStore.subscribe((state, prevState) => {
   if (
     state.timelineZoom !== prevState.timelineZoom ||
     state.density !== prevState.density ||
-    state.lanes !== prevState.lanes ||
+    state.verticalLines !== prevState.verticalLines ||
     state.xSnapEnabled !== prevState.xSnapEnabled ||
     state.activeTool !== prevState.activeTool ||
     state.noteSideFilter !== prevState.noteSideFilter
@@ -127,15 +133,29 @@ if (isTauri()) {
         const cs = useChartStore.getState();
         if (cs.isDirty) {
           event.preventDefault();
-          // Dynamic import: showConfirm requires ConfirmDialog to be mounted (React ready)
-          const { showConfirm } = await import("./components/common/ConfirmDialog");
-          const confirmed = await showConfirm("You have unsaved changes. Quit anyway?");
-          if (confirmed) {
-            await saveAppState();
-            // Use destroy() instead of close() to avoid re-triggering this handler
+          // Bug audit #13: wrap the showConfirm prompt in a try/catch.
+          // If the dynamic import fails, ConfirmDialog isn't mounted, or
+          // the promise rejects for any reason, the original code left
+          // the window preventDefault-ed forever — the user couldn't
+          // close the app. Now: on any error, save best-effort and
+          // destroy the window so the user can always exit. Prefer
+          // losing unsaved changes to locking the app.
+          try {
+            // Dynamic import: showConfirm requires ConfirmDialog to be mounted (React ready)
+            const { showConfirm } = await import("./components/common/ConfirmDialog");
+            const confirmed = await showConfirm("You have unsaved changes. Quit anyway?");
+            if (confirmed) {
+              await saveAppState();
+              // Use destroy() instead of close() to avoid re-triggering this handler
+              getCurrentWindow().destroy();
+            }
+            // If cancelled, do nothing — window stays open
+          } catch (err) {
+            console.error("Close-confirm dialog failed; forcing quit to avoid deadlock:", err);
+            // Best-effort save, then force-close so the window doesn't get stuck.
+            try { await saveAppState(); } catch { /* ignore */ }
             getCurrentWindow().destroy();
           }
-          // If cancelled, do nothing — window stays open
         } else {
           await saveAppState();
         }

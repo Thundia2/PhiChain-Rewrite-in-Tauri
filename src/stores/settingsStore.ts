@@ -8,8 +8,14 @@
 //   const noteSize = useSettingsStore(s => s.noteSize);
 //   const update = useSettingsStore(s => s.updateSettings);
 //
-// Recent change: Added onset detection persistent settings —
-// onsetDetectionEnabled, onsetSensitivity, onsetOpacity, onsetSnapToGrid.
+// Recent change (bug audit #12): Added `sanitizeSettings` that
+// clamps numeric fields and validates enum strings before a persisted
+// blob reaches the store. Previously `loadSettings` did a raw
+// `{ ...DEFAULTS, ...saved }` merge with no validation — a corrupted
+// or hand-edited settings.json could push invalid values (negative
+// tab height, out-of-range volume, unknown enum) straight into code
+// that never re-clamps (audioEngine volume cube, layout math). Now
+// every load goes through a sanitizer with per-field clamps.
 // ============================================================
 
 import { create } from "zustand";
@@ -43,6 +49,10 @@ export interface SettingsState {
 
   // ---- Editor ----
   defaultEditorView: "unified" | "classic" | "unrolled";
+
+  // ---- Tab Bar ----
+  tabHeight: number;   // Tab button height in px (24-48, default 34)
+  tabMaxWidth: number; // Tab button max-width in px (120-400, default 260)
 
   // ---- Line Strip ----
   lineInactivityTimeoutSeconds: number; // Seconds with no upcoming note before a line is demoted to inactive (0 = disabled)
@@ -92,6 +102,28 @@ export interface SettingsState {
   /** Whether to snap onset markers to the beat grid */
   onsetSnapToGrid: boolean;
 
+  // ---- AI Generation ----
+  /** Whether AI generation is enabled (user must opt-in) */
+  aiEnabled: boolean;
+  /** "local" = local server (Ollama/vLLM), "remote" = cloud API (Gemini, OpenRouter) */
+  aiMode: "local" | "remote";
+  /** AI server endpoint URL */
+  aiEndpoint: string;
+  /** Model name for the inference server */
+  aiModel: string;
+  /** Temperature for AI generation (0.0-1.0, lower = more deterministic) */
+  aiTemperature: number;
+  /** Maximum tokens for AI response */
+  aiMaxTokens: number;
+  /** API key for remote endpoints (e.g. Google Gemini API) — empty string for local servers */
+  aiApiKey: string;
+  /** Custom instructions appended after the built-in system prompt — empty string to use defaults only */
+  aiCustomPrompt: string;
+
+  // ---- Renderer (PAUSED / ON HOLD) ----
+  /** Use GPU-accelerated PixiJS renderer instead of Canvas 2D (experimental, on hold) */
+  usePixiRenderer: boolean;
+
   // ---- Onboarding ----
   hasSeenOnboarding: boolean;
 
@@ -125,6 +157,117 @@ type SettingsData = Omit<SettingsState, "updateSettings" | "loadSettings" | "sav
 
 const STORAGE_KEY = "phichain-settings";
 
+// ---- Sanitization helpers (bug audit #12) ---------------------
+//
+// Clamp a numeric field to a range, falling back to the default when
+// the input is not a finite number (covers NaN, Infinity, strings,
+// null, undefined from corrupted JSON).
+function clampNum(v: unknown, min: number, max: number, fallback: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  if (v < min) return min;
+  if (v > max) return max;
+  return v;
+}
+
+// Validate an enum-string field against a set of allowed values.
+function enumStr<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(v as T) ? (v as T) : fallback;
+}
+
+// Validate a boolean field — accepts only true/false, not truthy strings.
+function boolVal(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
+// Validate an array field (keeps only arrays; content checks are caller's job).
+function arrVal<T>(v: unknown, fallback: T[]): T[] {
+  return Array.isArray(v) ? (v as T[]) : fallback;
+}
+
+/**
+ * Clamp/validate every field on a persisted partial-SettingsData.
+ * Any field outside its range or with the wrong type is replaced
+ * with the corresponding DEFAULTS value. Fields not present in the
+ * input are simply absent in the output (the caller spreads DEFAULTS
+ * under this to fill them).
+ *
+ * Ranges come from the UI control clamps and comments in SettingsState.
+ */
+function sanitizeSettings(raw: Partial<SettingsData>): Partial<SettingsData> {
+  const out: Partial<SettingsData> = {};
+
+  // Scalar ranges picked from UI slider bounds + existing comments.
+  if ("language" in raw) out.language = typeof raw.language === "string" ? raw.language : DEFAULTS.language;
+  if ("musicVolume" in raw) out.musicVolume = clampNum(raw.musicVolume, 0, 1, DEFAULTS.musicVolume);
+  if ("hitSoundVolume" in raw) out.hitSoundVolume = clampNum(raw.hitSoundVolume, 0, 1, DEFAULTS.hitSoundVolume);
+  if ("hitSoundEnabled" in raw) out.hitSoundEnabled = boolVal(raw.hitSoundEnabled, DEFAULTS.hitSoundEnabled);
+  if ("audioLatencyMs" in raw) out.audioLatencyMs = clampNum(raw.audioLatencyMs, -300, 300, DEFAULTS.audioLatencyMs);
+  if ("noteSize" in raw) out.noteSize = clampNum(raw.noteSize, 0.1, 5, DEFAULTS.noteSize);
+  if ("backgroundDim" in raw) out.backgroundDim = clampNum(raw.backgroundDim, 0, 1, DEFAULTS.backgroundDim);
+  if ("showHitEffects" in raw) out.showHitEffects = boolVal(raw.showHitEffects, DEFAULTS.showHitEffects);
+  if ("showFcApIndicator" in raw) out.showFcApIndicator = boolVal(raw.showFcApIndicator, DEFAULTS.showFcApIndicator);
+  if ("multiHighlight" in raw) out.multiHighlight = boolVal(raw.multiHighlight, DEFAULTS.multiHighlight);
+  if ("anchorMarkerVisibility" in raw) {
+    out.anchorMarkerVisibility = enumStr(raw.anchorMarkerVisibility, ["never", "always", "when_visible"] as const, DEFAULTS.anchorMarkerVisibility);
+  }
+  if ("showHud" in raw) out.showHud = boolVal(raw.showHud, DEFAULTS.showHud);
+  if ("invertScrollDirection" in raw) out.invertScrollDirection = boolVal(raw.invertScrollDirection, DEFAULTS.invertScrollDirection);
+  if ("timelineFollowPlayback" in raw) out.timelineFollowPlayback = boolVal(raw.timelineFollowPlayback, DEFAULTS.timelineFollowPlayback);
+  if ("rotationSnapDegrees" in raw) out.rotationSnapDegrees = clampNum(raw.rotationSnapDegrees, 0, 180, DEFAULTS.rotationSnapDegrees);
+  if ("defaultEditorView" in raw) out.defaultEditorView = enumStr(raw.defaultEditorView, ["unified", "classic", "unrolled"] as const, DEFAULTS.defaultEditorView);
+  // Tab bar: clamps from comments on the fields (24-48, 120-400).
+  if ("tabHeight" in raw) out.tabHeight = clampNum(raw.tabHeight, 24, 48, DEFAULTS.tabHeight);
+  if ("tabMaxWidth" in raw) out.tabMaxWidth = clampNum(raw.tabMaxWidth, 120, 400, DEFAULTS.tabMaxWidth);
+  if ("lineInactivityTimeoutSeconds" in raw) out.lineInactivityTimeoutSeconds = clampNum(raw.lineInactivityTimeoutSeconds, 0, 3600, DEFAULTS.lineInactivityTimeoutSeconds);
+  if ("autosaveEnabled" in raw) out.autosaveEnabled = boolVal(raw.autosaveEnabled, DEFAULTS.autosaveEnabled);
+  if ("autosaveIntervalSeconds" in raw) out.autosaveIntervalSeconds = clampNum(raw.autosaveIntervalSeconds, 5, 3600, DEFAULTS.autosaveIntervalSeconds);
+  if ("quickTransitionDuration" in raw) out.quickTransitionDuration = clampNum(raw.quickTransitionDuration, 0.01, 1000, DEFAULTS.quickTransitionDuration);
+  if ("quickTransitionEasing" in raw) out.quickTransitionEasing = typeof raw.quickTransitionEasing === "string" ? raw.quickTransitionEasing : DEFAULTS.quickTransitionEasing;
+  if ("recordSnapToDensity" in raw) out.recordSnapToDensity = boolVal(raw.recordSnapToDensity, DEFAULTS.recordSnapToDensity);
+  if ("recordSimplificationDefault" in raw) out.recordSimplificationDefault = clampNum(raw.recordSimplificationDefault, 0, 100, DEFAULTS.recordSimplificationDefault);
+  if ("defaultTextDurationBeats" in raw) out.defaultTextDurationBeats = clampNum(raw.defaultTextDurationBeats, 0.01, 1000, DEFAULTS.defaultTextDurationBeats);
+  if ("showLinePath" in raw) out.showLinePath = boolVal(raw.showLinePath, DEFAULTS.showLinePath);
+  if ("linePathBeatsAhead" in raw) out.linePathBeatsAhead = clampNum(raw.linePathBeatsAhead, 0, 1000, DEFAULTS.linePathBeatsAhead);
+  if ("linePathBeatsBehind" in raw) out.linePathBeatsBehind = clampNum(raw.linePathBeatsBehind, 0, 1000, DEFAULTS.linePathBeatsBehind);
+  if ("linePathSampleInterval" in raw) out.linePathSampleInterval = clampNum(raw.linePathSampleInterval, 0.01, 10, DEFAULTS.linePathSampleInterval);
+  if ("showBeatGrid" in raw) out.showBeatGrid = boolVal(raw.showBeatGrid, DEFAULTS.showBeatGrid);
+  if ("beatGridBeatsAhead" in raw) out.beatGridBeatsAhead = clampNum(raw.beatGridBeatsAhead, 0, 1000, DEFAULTS.beatGridBeatsAhead);
+  if ("recentColors" in raw) out.recentColors = arrVal(raw.recentColors, DEFAULTS.recentColors);
+  if ("recentEasings" in raw) out.recentEasings = arrVal(raw.recentEasings, DEFAULTS.recentEasings);
+  if ("favoriteEasings" in raw) out.favoriteEasings = arrVal(raw.favoriteEasings, DEFAULTS.favoriteEasings);
+  if ("unrolledDefaultAbove" in raw) out.unrolledDefaultAbove = boolVal(raw.unrolledDefaultAbove, DEFAULTS.unrolledDefaultAbove);
+  if ("onsetDetectionEnabled" in raw) out.onsetDetectionEnabled = boolVal(raw.onsetDetectionEnabled, DEFAULTS.onsetDetectionEnabled);
+  if ("onsetSensitivity" in raw) out.onsetSensitivity = clampNum(raw.onsetSensitivity, 0, 1, DEFAULTS.onsetSensitivity);
+  if ("onsetOpacity" in raw) out.onsetOpacity = clampNum(raw.onsetOpacity, 0, 1, DEFAULTS.onsetOpacity);
+  if ("onsetSnapToGrid" in raw) out.onsetSnapToGrid = boolVal(raw.onsetSnapToGrid, DEFAULTS.onsetSnapToGrid);
+  if ("aiEnabled" in raw) out.aiEnabled = boolVal(raw.aiEnabled, DEFAULTS.aiEnabled);
+  if ("aiMode" in raw) out.aiMode = enumStr(raw.aiMode, ["local", "remote"] as const, DEFAULTS.aiMode);
+  if ("aiEndpoint" in raw) out.aiEndpoint = typeof raw.aiEndpoint === "string" ? raw.aiEndpoint : DEFAULTS.aiEndpoint;
+  if ("aiModel" in raw) out.aiModel = typeof raw.aiModel === "string" ? raw.aiModel : DEFAULTS.aiModel;
+  if ("aiTemperature" in raw) out.aiTemperature = clampNum(raw.aiTemperature, 0, 2, DEFAULTS.aiTemperature);
+  if ("aiMaxTokens" in raw) out.aiMaxTokens = Math.round(clampNum(raw.aiMaxTokens, 1, 1_000_000, DEFAULTS.aiMaxTokens));
+  if ("aiApiKey" in raw) out.aiApiKey = typeof raw.aiApiKey === "string" ? raw.aiApiKey : DEFAULTS.aiApiKey;
+  if ("aiCustomPrompt" in raw) out.aiCustomPrompt = typeof raw.aiCustomPrompt === "string" ? raw.aiCustomPrompt : DEFAULTS.aiCustomPrompt;
+  if ("usePixiRenderer" in raw) out.usePixiRenderer = boolVal(raw.usePixiRenderer, DEFAULTS.usePixiRenderer);
+  if ("hasSeenOnboarding" in raw) out.hasSeenOnboarding = boolVal(raw.hasSeenOnboarding, DEFAULTS.hasSeenOnboarding);
+  if ("hotkeyOverrides" in raw) {
+    // Keep only string→string entries.
+    const src = raw.hotkeyOverrides;
+    if (src && typeof src === "object" && !Array.isArray(src)) {
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(src)) {
+        if (typeof k === "string" && typeof v === "string") clean[k] = v;
+      }
+      out.hotkeyOverrides = clean;
+    } else {
+      out.hotkeyOverrides = DEFAULTS.hotkeyOverrides;
+    }
+  }
+  if ("customPresets" in raw) out.customPresets = arrVal(raw.customPresets, DEFAULTS.customPresets);
+
+  return out;
+}
+
 const DEFAULTS: SettingsData = {
   language: "en",
   musicVolume: 0.8,
@@ -142,6 +285,8 @@ const DEFAULTS: SettingsData = {
   timelineFollowPlayback: true,
   rotationSnapDegrees: 15,
   defaultEditorView: "unified" as const,
+  tabHeight: 34,
+  tabMaxWidth: 260,
   lineInactivityTimeoutSeconds: 5,
   autosaveEnabled: true,
   autosaveIntervalSeconds: 120,
@@ -161,9 +306,18 @@ const DEFAULTS: SettingsData = {
   favoriteEasings: ["linear", "ease_out_sine", "ease_out_cubic"],
   unrolledDefaultAbove: true,
   onsetDetectionEnabled: false,
-  onsetSensitivity: 0.5,
+  onsetSensitivity: 0.3,
   onsetOpacity: 0.6,
   onsetSnapToGrid: false,
+  aiEnabled: false,
+  aiMode: "remote" as const,
+  aiEndpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
+  aiModel: "gemma-3-27b-it",
+  aiTemperature: 0.2,
+  aiMaxTokens: 8192,
+  aiApiKey: "",
+  aiCustomPrompt: "",
+  usePixiRenderer: false,
   hasSeenOnboarding: false,
   hotkeyOverrides: {},
   customPresets: [],
@@ -229,16 +383,21 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
       // Try new appStorage first
       const saved = await readJson<Partial<SettingsData>>("settings.json");
       if (saved) {
-        set({ ...DEFAULTS, ...saved });
+        // Bug audit #12: sanitize before merging so corrupted or
+        // hand-edited values (NaN, out-of-range, wrong enum) are
+        // replaced with defaults instead of poisoning the store.
+        set({ ...DEFAULTS, ...sanitizeSettings(saved) });
         return;
       }
       // Migration: fall back to old localStorage key
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<SettingsData>;
-        set({ ...DEFAULTS, ...parsed });
-        // Migrate to new location
-        await writeJson("settings.json", { ...DEFAULTS, ...parsed });
+        const clean = sanitizeSettings(parsed);
+        set({ ...DEFAULTS, ...clean });
+        // Migrate to new location — write the cleaned blob so we don't
+        // carry the corruption forward.
+        await writeJson("settings.json", { ...DEFAULTS, ...clean });
       }
     } catch {
       // Ignore parse errors, keep defaults
@@ -265,6 +424,8 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         timelineFollowPlayback: state.timelineFollowPlayback,
         rotationSnapDegrees: state.rotationSnapDegrees,
         defaultEditorView: state.defaultEditorView,
+        tabHeight: state.tabHeight,
+        tabMaxWidth: state.tabMaxWidth,
         lineInactivityTimeoutSeconds: state.lineInactivityTimeoutSeconds,
         autosaveEnabled: state.autosaveEnabled,
         autosaveIntervalSeconds: state.autosaveIntervalSeconds,
@@ -287,6 +448,15 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         recentColors: state.recentColors,
         recentEasings: state.recentEasings,
         favoriteEasings: state.favoriteEasings,
+        aiEnabled: state.aiEnabled,
+        aiMode: state.aiMode,
+        aiEndpoint: state.aiEndpoint,
+        aiModel: state.aiModel,
+        aiTemperature: state.aiTemperature,
+        aiMaxTokens: state.aiMaxTokens,
+        aiApiKey: state.aiApiKey,
+        aiCustomPrompt: state.aiCustomPrompt,
+        usePixiRenderer: state.usePixiRenderer,
         hasSeenOnboarding: state.hasSeenOnboarding,
         hotkeyOverrides: state.hotkeyOverrides,
         customPresets: state.customPresets,

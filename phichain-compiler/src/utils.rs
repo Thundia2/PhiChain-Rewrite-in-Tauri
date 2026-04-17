@@ -42,28 +42,28 @@ impl EventSequence for Vec<LineEvent> {
     }
 
     fn x(&self) -> Self {
-        self.iter().filter(|x| x.kind.is_x()).copied().collect()
+        self.iter().filter(|x| x.kind.is_x()).cloned().collect()
     }
 
     fn y(&self) -> Self {
-        self.iter().filter(|x| x.kind.is_y()).copied().collect()
+        self.iter().filter(|x| x.kind.is_y()).cloned().collect()
     }
 
     fn rotation(&self) -> Self {
         self.iter()
             .filter(|x| x.kind.is_rotation())
-            .copied()
+            .cloned()
             .collect()
     }
 
     fn opacity(&self) -> Self {
         self.iter()
             .filter(|x| x.kind.is_opacity())
-            .copied()
+            .cloned()
             .collect()
     }
 
     fn speed(&self) -> Self {
-        self.iter().filter(|x| x.kind.is_speed()).copied().collect()
+        self.iter().filter(|x| x.kind.is_speed()).cloned().collect()
     }
 }

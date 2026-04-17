@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 src-tauri/target/
+phichain-chart/target/
 
 # IDE
 .vscode/
@@ -21,4 +22,8 @@ Thumbs.db
 .env.local
 
 build/
+
+# Tool-local state (Claude Code, Playwright MCP)
+.claude/
+.playwright-mcp/
 

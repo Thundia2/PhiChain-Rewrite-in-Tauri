@@ -8,6 +8,8 @@
 
 import { useState, useCallback } from "react";
 import { useContextPanelStore } from "../../stores/contextPanelStore";
+import { useSettingsStore } from "../../stores/settingsStore";
+import { useEditorStore } from "../../stores/editorStore";
 
 // ---- Tool definitions ----
 
@@ -58,6 +60,8 @@ export interface MiscToolsTabProps {
 export function MiscToolsTab(props: MiscToolsTabProps) {
   const pinnedMiscItems = useContextPanelStore((s) => s.pinnedMiscItems);
   const togglePinMiscItem = useContextPanelStore((s) => s.togglePinMiscItem);
+  const setActiveTab = useContextPanelStore((s) => s.setActiveTab);
+  const aiEnabled = useSettingsStore((s) => s.aiEnabled);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   const handleClick = useCallback(
@@ -169,6 +173,71 @@ export function MiscToolsTab(props: MiscToolsTabProps) {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, padding: 2 }}>
           {QUICK_ACTION_TOOLS.map(renderCard)}
+        </div>
+      </div>
+
+      {/* AI Generation — switches to the AI tab */}
+      <div>
+        <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.5px", padding: "0 2px 6px" }}>
+          AI
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, padding: 2 }}>
+          <button
+            onClick={() => {
+              if (!aiEnabled) return;
+              // Determine current mode from store state
+              const es = useEditorStore.getState();
+              let mode: string;
+              if (es.multiSelectedLineIndices.length > 1) mode = "multi";
+              else if (es.selectedEventIndices.length > 0) mode = "event";
+              else if (es.selectedNoteIndices.length > 0) mode = "note";
+              else if (es.selectedLineIndex !== null) mode = "line";
+              else mode = "global";
+              setActiveTab(mode, "ai");
+            }}
+            onMouseEnter={() => setHoveredId("ai-generate")}
+            onMouseLeave={() => setHoveredId(null)}
+            style={{
+              position: "relative",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              padding: "12px 8px 10px",
+              minHeight: 80,
+              borderRadius: 8,
+              border: hoveredId === "ai-generate"
+                ? aiEnabled ? "1px solid #3dd8e0" : "1px solid var(--border-color)"
+                : "1px solid var(--border-color)",
+              background: hoveredId === "ai-generate" && aiEnabled
+                ? "rgba(61, 216, 224, 0.05)"
+                : "var(--bg-primary)",
+              cursor: aiEnabled ? "pointer" : "default",
+              fontFamily: "inherit",
+              textAlign: "center",
+              transition: "all 0.15s",
+              opacity: aiEnabled ? 1 : 0.45,
+            }}
+          >
+            <span style={{ fontSize: 24, lineHeight: 1, color: aiEnabled ? "#3dd8e0" : "var(--text-muted)" }}>{"\u2726"}</span>
+            <span
+              style={{
+                fontSize: 11,
+                color: hoveredId === "ai-generate" && aiEnabled ? "#3dd8e0" : "var(--text-secondary)",
+                fontWeight: hoveredId === "ai-generate" ? 500 : 400,
+                lineHeight: 1.2,
+                transition: "color 0.12s",
+              }}
+            >
+              AI Generation
+            </span>
+            {!aiEnabled && (
+              <span style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.2 }}>
+                Enable in Settings
+              </span>
+            )}
+          </button>
         </div>
       </div>
     </div>

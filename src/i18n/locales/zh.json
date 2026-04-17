@@ -9,7 +9,7 @@
     "file_new": "\u65b0\u5efa\u8c31\u9762...",
     "file_save": "\u4fdd\u5b58\u5de5\u7a0b",
     "file_close": "\u5173\u95ed\u5de5\u7a0b",
-    "file_import_rpe": "\u5bfc\u5165 RPE \u8c31\u9762...",
+    "file_import_chart": "\u5bfc\u5165\u8c31\u9762...",
     "file_preferences": "\u8bbe\u7f6e...",
     "file_quit": "\u9000\u51fa",
     "edit_undo": "\u64a4\u9500",
@@ -132,7 +132,7 @@
     "hotkeys_conflict": "\u51b2\u7a81\uff1a\u4e0e\u300c{{action}}\u300d\u76f8\u540c\u7ed1\u5b9a",
     "project_settings": "\u5de5\u7a0b\u8bbe\u7f6e",
     "project_density": "\u7f51\u683c\u5bc6\u5ea6",
-    "project_lanes": "\u8f68\u9053\u6570",
+    "project_verticalLines": "X\u7f51\u683c\u7ebf\u6570",
     "project_rotation_snap": "\u65cb\u8f6c\u5bf9\u9f50"
   },
   "validation": {

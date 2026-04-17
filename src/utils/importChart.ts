@@ -1,15 +1,19 @@
 // ============================================================
-// Import Chart — Shared utility
+// Unified Chart Import
 //
-// Opens a file picker for .json/.zip/.pez files and imports
-// the chart using the RPE importer. Records to recent projects.
-// This is extracted so it can be called from both the HomeScreen
-// card, the Ctrl+O hotkey, and the File menu.
+// Single entry point for importing charts in any supported format:
+// RPE (.json, .zip, .pez), PEC (.pec, .txt), Official Phigros
+// (.json), or zip bundles containing any of these with optional
+// info.txt / info.yml metadata.
 //
-// Recent change: Added cleanup for blob Object URLs and custom
-// FontFace on project replacement/close. Previously these leaked
-// indefinitely — URLs were never revoked and fonts accumulated
-// in document.fonts across imports.
+// Format is auto-detected from content (no user selection needed),
+// matching Phira's approach. Zip bundles can include audio,
+// illustration, fonts, textures, extra.json, groups, bookmarks.
+//
+// Recent change: Unified importer — merged the previously separate
+// RPE/PEC/Official import paths into one auto-detecting pipeline.
+// Added info.txt parsing for Phigros Official zip packages and
+// zip support for all chart formats. Removed RPE-only assumption.
 // ============================================================
 
 import type JSZip from "jszip";
@@ -28,8 +32,12 @@ import {
   setSkipNextSave,
   setSkipNextRestore,
   setAudioBlobUrl,
+  setStoredProjectId,
 } from "./chartSessions";
 import type { ExtraConfig } from "../types/extra";
+import type { ProjectMeta, PhichainChart } from "../types/chart";
+import type { DetectedChartFormat } from "./chartFormatDetect";
+import type { InfoTxtResult } from "./infoTxtParser";
 
 // ============================================================
 // Resource cleanup tracking
@@ -77,8 +85,8 @@ useChartStore.subscribe((state) => {
  * Search a ZIP archive for an entry whose basename (filename without path)
  * matches the target name, case-insensitively. Returns the first match or null.
  * Used to locate the exact audio/illustration file specified by RPE META fields
- * even when the ZIP contains multiple files with the same extension (e.g. drag
- * sound effects alongside the actual song).
+ * or info.txt file pointers even when the ZIP contains nested directories or
+ * multiple files with the same extension.
  */
 function findZipEntryByBasename(
   zip: JSZip,
@@ -94,14 +102,99 @@ function findZipEntryByBasename(
   return found;
 }
 
+// ============================================================
+// Zip scanning — categorize entries into known roles
+// ============================================================
+
+interface ZipScanResult {
+  infoTxtEntry: JSZip.JSZipObject | null;
+  infoYmlEntry: JSZip.JSZipObject | null;
+  jsonChartEntry: JSZip.JSZipObject | null;
+  pecChartEntry: JSZip.JSZipObject | null;
+  audioEntry: JSZip.JSZipObject | null;
+  imageEntry: JSZip.JSZipObject | null;
+  extraEntry: JSZip.JSZipObject | null;
+  groupsEntry: JSZip.JSZipObject | null;
+  bookmarksEntry: JSZip.JSZipObject | null;
+  fontEntry: JSZip.JSZipObject | null;
+  musicExt: string | null;
+}
+
+/** Scan a zip archive and categorize entries by role. */
+function scanZipEntries(zip: JSZip): ZipScanResult {
+  const result: ZipScanResult = {
+    infoTxtEntry: null,
+    infoYmlEntry: null,
+    jsonChartEntry: null,
+    pecChartEntry: null,
+    audioEntry: null,
+    imageEntry: null,
+    extraEntry: null,
+    groupsEntry: null,
+    bookmarksEntry: null,
+    fontEntry: null,
+    musicExt: null,
+  };
+
+  zip.forEach((relativePath, entry) => {
+    if (entry.dir) return;
+    const baseName = relativePath.split("/").pop()?.toLowerCase() ?? "";
+    const pathLower = relativePath.toLowerCase();
+
+    // Info metadata files
+    if ((baseName === "info.yml" || baseName === "info.yaml") && !result.infoYmlEntry) {
+      result.infoYmlEntry = entry;
+    } else if (baseName === "info.txt" && !result.infoTxtEntry) {
+      result.infoTxtEntry = entry;
+    }
+    // Editor config files
+    else if (
+      (pathLower === "canvas/groups.json" || baseName === "groups.json") &&
+      !result.groupsEntry
+    ) {
+      result.groupsEntry = entry;
+    } else if (pathLower === "canvas/bookmarks.json" && !result.bookmarksEntry) {
+      result.bookmarksEntry = entry;
+    } else if (baseName === "extra.json" && !result.extraEntry) {
+      result.extraEntry = entry;
+    }
+    // Chart files (JSON has priority, PEC/TXT as fallback)
+    else if (baseName.endsWith(".json") && !result.jsonChartEntry) {
+      result.jsonChartEntry = entry;
+    } else if (/\.(pec|txt)$/.test(baseName) && !result.pecChartEntry) {
+      result.pecChartEntry = entry;
+    }
+    // Media files
+    else if (/\.(mp3|ogg|wav|flac|m4a)$/.test(baseName) && !result.audioEntry) {
+      result.audioEntry = entry;
+      result.musicExt = baseName.split(".").pop() ?? "mp3";
+    } else if (/\.(jpg|jpeg|png|webp)$/.test(baseName) && !result.imageEntry) {
+      result.imageEntry = entry;
+    }
+    // Font files (RPE-specific)
+    else if (/\.(otf|ttf|woff|woff2)$/.test(baseName) && !result.fontEntry) {
+      result.fontEntry = entry;
+    }
+  });
+
+  return result;
+}
+
+// ============================================================
+// Main Import Function
+// ============================================================
+
 /**
- * Opens a file picker and imports an RPE chart (.json, .zip, .pez).
+ * Opens a file picker and imports a chart in any supported format.
+ * Auto-detects RPE, Official (Phigros), or PEC from content.
+ * Handles zip bundles with audio, illustration, and metadata.
  * Records the import to the recent projects store.
  */
 export function triggerImportChart() {
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = ".json,.zip,.pez";
+  // Accept all supported formats: RPE (.json, .zip, .pez), PEC (.pec, .txt), Official (.json)
+  input.accept = ".json,.zip,.pez,.pec,.txt";
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
@@ -115,129 +208,187 @@ export function triggerImportChart() {
       let bookmarksJson: string | null = null;
       let fontEntry: JSZip.JSZipObject | null = null;
       let zip: JSZip | null = null;
+      let infoTxtParsed: InfoTxtResult | null = null;
+      let infoYmlEntry: JSZip.JSZipObject | null = null;
 
-      if (
+      const isZipFile =
         file.name.toLowerCase().endsWith(".zip") ||
-        file.name.toLowerCase().endsWith(".pez")
-      ) {
+        file.name.toLowerCase().endsWith(".pez");
+
+      if (isZipFile) {
+        // ── ZIP / PEZ: extract and scan ──────────────────────
         const { default: JSZipLib } = await import("jszip");
         const zipData = await file.arrayBuffer();
         zip = await JSZipLib.loadAsync(zipData);
 
+        const scan = scanZipEntries(zip);
+        musicExt = scan.musicExt;
+        fontEntry = scan.fontEntry;
+        infoYmlEntry = scan.infoYmlEntry;
+
+        // Parse info files if present (info.txt provides file pointers)
+        if (scan.infoTxtEntry) {
+          try {
+            const { parseInfoTxt } = await import("./infoTxtParser");
+            const infoTxtText = await scan.infoTxtEntry.async("string");
+            infoTxtParsed = parseInfoTxt(infoTxtText);
+          } catch { /* ignore invalid info.txt */ }
+        }
+
+        // Resolve chart entry: info.txt Chart pointer > first .json > first .pec/.txt
         let chartEntry: JSZip.JSZipObject | null = null;
-        let audioEntry: JSZip.JSZipObject | null = null;
-        let imageEntry: JSZip.JSZipObject | null = null;
-        let extraEntry: JSZip.JSZipObject | null = null;
-        let groupsEntry: JSZip.JSZipObject | null = null;
-        let bookmarksEntry: JSZip.JSZipObject | null = null;
-
-        zip.forEach((relativePath, entry) => {
-          if (entry.dir) return;
-          const baseName =
-            relativePath.split("/").pop()?.toLowerCase() ?? "";
-          const pathLower = relativePath.toLowerCase();
-          if (
-            (pathLower === "canvas/groups.json" || baseName === "groups.json") &&
-            !groupsEntry
-          ) {
-            groupsEntry = entry;
-          } else if (pathLower === "canvas/bookmarks.json" && !bookmarksEntry) {
-            bookmarksEntry = entry;
-          } else if (baseName === "extra.json" && !extraEntry) {
-            extraEntry = entry;
-          } else if (baseName.endsWith(".json") && !chartEntry) {
-            chartEntry = entry;
-          } else if (
-            /\.(mp3|ogg|wav|flac|m4a)$/.test(baseName) &&
-            !audioEntry
-          ) {
-            audioEntry = entry;
-            musicExt = baseName.split(".").pop() ?? "mp3";
-          } else if (
-            /\.(jpg|jpeg|png|webp)$/.test(baseName) &&
-            !imageEntry
-          ) {
-            imageEntry = entry;
-          } else if (
-            /\.(otf|ttf|woff|woff2)$/.test(baseName) &&
-            !fontEntry
-          ) {
-            fontEntry = entry;
-          }
-        });
-
+        if (infoTxtParsed?.chart) {
+          chartEntry = findZipEntryByBasename(zip, infoTxtParsed.chart);
+        }
+        if (!chartEntry) chartEntry = scan.jsonChartEntry;
+        if (!chartEntry) chartEntry = scan.pecChartEntry;
         if (!chartEntry) {
-          throw new Error("No .json chart file found in the zip archive.");
+          throw new Error("No chart file found in the zip archive.");
         }
-        chartText = await (chartEntry as JSZip.JSZipObject).async("string");
+        chartText = await chartEntry.async("string");
 
-        if (audioEntry) {
-          musicBlob = await (audioEntry as JSZip.JSZipObject).async("blob");
+        // Resolve audio: info.txt Music pointer > generic scan
+        if (infoTxtParsed?.music) {
+          const infoAudio = findZipEntryByBasename(zip, infoTxtParsed.music);
+          if (infoAudio) {
+            musicBlob = await infoAudio.async("blob");
+            musicExt = infoTxtParsed.music.split(".").pop()?.toLowerCase() ?? "mp3";
+          }
         }
-        if (imageEntry) {
-          illustrationBlob = await (imageEntry as JSZip.JSZipObject).async(
-            "blob",
-          );
+        if (!musicBlob && scan.audioEntry) {
+          musicBlob = await scan.audioEntry.async("blob");
         }
-        if (extraEntry) {
-          extraJson = await (extraEntry as JSZip.JSZipObject).async("string");
+
+        // Resolve illustration: info.txt Image pointer > generic scan
+        if (infoTxtParsed?.image) {
+          const infoImage = findZipEntryByBasename(zip, infoTxtParsed.image);
+          if (infoImage) {
+            illustrationBlob = await infoImage.async("blob");
+          }
         }
-        if (groupsEntry) {
-          groupsJson = await (groupsEntry as JSZip.JSZipObject).async(
-            "string",
-          );
+        if (!illustrationBlob && scan.imageEntry) {
+          illustrationBlob = await scan.imageEntry.async("blob");
         }
-        if (bookmarksEntry) {
-          bookmarksJson = await (bookmarksEntry as JSZip.JSZipObject).async(
-            "string",
-          );
+
+        // Extract editor config files
+        if (scan.extraEntry) {
+          extraJson = await scan.extraEntry.async("string");
+        }
+        if (scan.groupsEntry) {
+          groupsJson = await scan.groupsEntry.async("string");
+        }
+        if (scan.bookmarksEntry) {
+          bookmarksJson = await scan.bookmarksEntry.async("string");
         }
       } else {
+        // ── Plain file: read as text ─────────────────────────
         chartText = await file.text();
       }
 
-      const { convertRpeToPhichain, extractRpeMeta, collectUnknownRpeFields } = await import(
-        "./rpeImport"
-      );
+      // ── Auto-detect chart format ────────────────────────────
+      const { detectChartFormat } = await import("./chartFormatDetect");
+      const format: DetectedChartFormat = detectChartFormat(chartText);
 
-      // Parse the RPE chart with dedicated error handling so malformed
-      // files get a user-friendly message instead of a raw stack trace
-      let chart;
-      try {
-        chart = convertRpeToPhichain(chartText);
-      } catch (parseErr) {
-        const reason = parseErr instanceof Error ? parseErr.message : "Unknown parse error";
-        throw new Error(`Failed to parse RPE chart: ${reason}`);
-      }
-      const meta = extractRpeMeta(chartText);
+      // ── Parse chart with the appropriate converter ──────────
+      let chart: PhichainChart;
+      let meta: ProjectMeta;
 
-      // Override audio/illustration with the exact files specified by RPE META.
-      // The initial ZIP scan picks the first audio/image file it encounters,
-      // which may be a sound effect (e.g. drag hit sound) instead of the song.
-      // META.song and META.background name the correct files explicitly.
-      if (zip && meta.rpe_song) {
-        const metaAudio = findZipEntryByBasename(zip, meta.rpe_song);
-        if (metaAudio) {
-          musicBlob = await metaAudio.async("blob");
-          musicExt = meta.rpe_song.split(".").pop()?.toLowerCase() ?? "mp3";
+      switch (format) {
+        case "rpe": {
+          const { convertRpeToPhichain, extractRpeMeta, collectUnknownRpeFields } =
+            await import("./rpeImport");
+
+          try {
+            chart = convertRpeToPhichain(chartText);
+          } catch (parseErr) {
+            const reason = parseErr instanceof Error ? parseErr.message : "Unknown parse error";
+            throw new Error(`Failed to parse RPE chart: ${reason}`);
+          }
+          meta = extractRpeMeta(chartText);
+
+          // RPE META overrides for audio/illustration (META.song and META.background
+          // name the correct files — the initial scan may have picked a sound effect)
+          if (zip && meta.rpe_song) {
+            const metaAudio = findZipEntryByBasename(zip, meta.rpe_song);
+            if (metaAudio) {
+              musicBlob = await metaAudio.async("blob");
+              musicExt = meta.rpe_song.split(".").pop()?.toLowerCase() ?? "mp3";
+            }
+          }
+          if (zip && meta.rpe_background) {
+            const metaImage = findZipEntryByBasename(zip, meta.rpe_background);
+            if (metaImage) {
+              illustrationBlob = await metaImage.async("blob");
+            }
+          }
+
+          // Warn about unrecognized RPE fields
+          const unknownFields = collectUnknownRpeFields(chartText);
+          if (unknownFields.length > 0) {
+            useToastStore.getState().addToast({
+              message: `Import skipped unknown fields: ${unknownFields.join(", ")}`,
+              type: "info",
+              duration: 6000,
+            });
+          }
+          break;
+        }
+        case "official": {
+          const { convertOfficialToPhichain } = await import("./officialImport");
+          try {
+            chart = convertOfficialToPhichain(chartText);
+          } catch (parseErr) {
+            const reason = parseErr instanceof Error ? parseErr.message : "Unknown parse error";
+            throw new Error(`Failed to parse Official chart: ${reason}`);
+          }
+          meta = {
+            name: file.name.replace(/\.(json|zip|pez)$/i, ""),
+            composer: "",
+            charter: "",
+            illustrator: "",
+            level: "",
+          };
+          break;
+        }
+        case "pec": {
+          const { convertPecToPhichain } = await import("./pecImport");
+          try {
+            chart = convertPecToPhichain(chartText);
+          } catch (parseErr) {
+            const reason = parseErr instanceof Error ? parseErr.message : "Unknown parse error";
+            throw new Error(`Failed to parse PEC chart: ${reason}`);
+          }
+          meta = {
+            name: file.name.replace(/\.(pec|txt|zip|pez)$/i, ""),
+            composer: "",
+            charter: "",
+            illustrator: "",
+            level: "",
+          };
+          break;
         }
       }
-      if (zip && meta.rpe_background) {
-        const metaImage = findZipEntryByBasename(zip, meta.rpe_background);
-        if (metaImage) {
-          illustrationBlob = await metaImage.async("blob");
-        }
+
+      // ── Apply info file metadata (layered: defaults → info.txt → info.yml) ──
+      if (infoTxtParsed) {
+        if (infoTxtParsed.name) meta.name = infoTxtParsed.name;
+        if (infoTxtParsed.composer) meta.composer = infoTxtParsed.composer;
+        if (infoTxtParsed.charter) meta.charter = infoTxtParsed.charter;
+        if (infoTxtParsed.illustrator) meta.illustrator = infoTxtParsed.illustrator;
+        if (infoTxtParsed.level) meta.level = infoTxtParsed.level;
       }
 
-      // Warn about unrecognized RPE fields
-      const unknownFields = collectUnknownRpeFields(chartText);
-      if (unknownFields.length > 0) {
-        useToastStore.getState().addToast({
-          message: `Import skipped unknown fields: ${unknownFields.join(", ")}`,
-          type: "info",
-          duration: 6000,
-        });
+      // info.yml has highest priority (Phira extended metadata)
+      if (infoYmlEntry) {
+        try {
+          const { parsePhiraInfoYml } = await import("./infoYmlParser");
+          const infoYmlText = await infoYmlEntry.async("string");
+          const phiraMeta = parsePhiraInfoYml(infoYmlText);
+          Object.assign(meta, phiraMeta);
+        } catch { /* ignore invalid info.yml */ }
       }
+
+      // ── Load chart into editor ──────────────────────────────
       const cs = useChartStore.getState();
 
       // Save the old chart's session before replacing it
@@ -260,6 +411,7 @@ export function triggerImportChart() {
         chart_json: JSON.stringify(chart),
       });
 
+      // ── Load audio ──────────────────────────────────────────
       if (musicBlob && musicExt) {
         // Revoke previous music URL before creating a new one
         if (_trackedMusicUrl) URL.revokeObjectURL(_trackedMusicUrl);
@@ -271,6 +423,7 @@ export function triggerImportChart() {
         setAudioBlobUrl(musicUrl, musicExt);
       }
 
+      // ── Load illustration ───────────────────────────────────
       if (illustrationBlob) {
         // Revoke previous illustration URL before creating a new one
         if (_trackedIllustrationUrl) URL.revokeObjectURL(_trackedIllustrationUrl);
@@ -279,6 +432,7 @@ export function triggerImportChart() {
         await cs.loadIllustration(illustrationUrl);
       }
 
+      // ── Load extra.json (effects/video config) ──────────────
       if (extraJson) {
         try {
           cs.setExtraConfig(JSON.parse(extraJson) as ExtraConfig);
@@ -287,6 +441,7 @@ export function triggerImportChart() {
         }
       }
 
+      // ── Load editor groups ──────────────────────────────────
       if (groupsJson) {
         try {
           useGroupStore.getState().loadGroupsJson(groupsJson);
@@ -295,6 +450,7 @@ export function triggerImportChart() {
         }
       }
 
+      // ── Load bookmarks ──────────────────────────────────────
       if (bookmarksJson) {
         try {
           useBookmarkStore.getState().loadBookmarksJson(bookmarksJson);
@@ -303,7 +459,8 @@ export function triggerImportChart() {
         }
       }
 
-      if (fontEntry) {
+      // ── Load custom font (RPE-specific) ─────────────────────
+      if (format === "rpe" && fontEntry) {
         try {
           // Clean up previous custom font before loading a new one
           if (_trackedFontFace) document.fonts.delete(_trackedFontFace);
@@ -326,8 +483,8 @@ export function triggerImportChart() {
         }
       }
 
-      // Load line textures from zip
-      if (zip) {
+      // ── Load line textures from zip (RPE-specific) ──────────
+      if (format === "rpe" && zip) {
         const textureNames = new Set<string>();
         for (const line of chart.lines) {
           if (line.texture && line.texture !== "line.png") {
@@ -354,7 +511,7 @@ export function triggerImportChart() {
         }
       }
 
-      // Record to recent projects
+      // ── Record to recent projects ───────────────────────────
       let totalNotes = 0;
       for (const line of chart.lines) {
         totalNotes += line.notes?.length ?? 0;
@@ -369,24 +526,32 @@ export function triggerImportChart() {
         illustrationBlob: illustrationBlob ? await illustrationBlob.arrayBuffer() : null,
         savedAt: Date.now(),
       });
+      // Bug audit #4: record the IndexedDB id so chartSessions can
+      // rematerialize audio from disk if this tab's blob URL dies
+      // while the user is on another tab.
+      setStoredProjectId(projectId);
       useRecentProjectsStore.getState().addRecent({
         id: projectId,
-        name: meta.name || file.name.replace(/\.(json|zip|pez)$/i, ""),
+        name: meta.name || file.name.replace(/\.(json|zip|pez|pec|txt)$/i, ""),
         composer: meta.composer || "",
         level: meta.level || "",
         lineCount: chart.lines.length,
         noteCount: totalNotes,
-        importType: "rpe",
+        importType: format,
       });
 
-      const importChartId = `rpe-import-${projectId}`;
-      const chartName = meta.name || "Imported RPE Chart";
+      // ── Open new tab ────────────────────────────────────────
+      const importChartId = `${format}-import-${projectId}`;
+      const chartName = meta.name || `Imported ${format.toUpperCase()} Chart`;
       useTabStore.getState().openChart(importChartId, chartName);
       setSkipNextRestore();
       registerSession(useTabStore.getState().getChartTabId(importChartId));
     } catch (e) {
-      console.error("RPE import failed:", e);
-      useToastStore.getState().addToast({ message: "Failed to import RPE chart. Check the console for details.", type: "error" });
+      console.error("Chart import failed:", e);
+      useToastStore.getState().addToast({
+        message: "Failed to import chart. Check the console for details.",
+        type: "error",
+      });
     }
   };
   input.click();

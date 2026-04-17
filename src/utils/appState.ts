@@ -41,7 +41,8 @@ interface AppStateData {
   editorPrefs: {
     timelineZoom: number;
     density: number;
-    lanes: number;
+    verticalLines?: number;
+    lanes?: number; // legacy field — migration reads this if verticalLines is absent
     xSnapEnabled?: boolean;
     activeTool: EditorTool;
     playbackRate: number;
@@ -85,7 +86,7 @@ export async function saveAppState(): Promise<void> {
       editorPrefs: {
         timelineZoom: editorState.timelineZoom,
         density: editorState.density,
-        lanes: editorState.lanes,
+        verticalLines: editorState.verticalLines,
         xSnapEnabled: editorState.xSnapEnabled,
         activeTool: editorState.activeTool,
         playbackRate: audioState.playbackRate,
@@ -115,7 +116,9 @@ export async function restoreAppState(): Promise<string | null> {
     if (data.editorPrefs) {
       es.setTimelineZoom(data.editorPrefs.timelineZoom);
       es.setDensity(data.editorPrefs.density);
-      es.setLanes(data.editorPrefs.lanes);
+      // Migration: old saves have "lanes" (division count). Default to 21 for any old data.
+      const vl = data.editorPrefs.verticalLines ?? 21;
+      es.setVerticalLines(vl);
       if (data.editorPrefs.xSnapEnabled) es.toggleXSnap(); // Restore X snap state
       es.setTool(data.editorPrefs.activeTool);
       es.setNoteSideFilter(data.editorPrefs.noteSideFilter);

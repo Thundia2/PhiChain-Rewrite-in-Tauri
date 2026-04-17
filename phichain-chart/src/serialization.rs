@@ -31,7 +31,10 @@ impl Format for PhichainChart {
                 .iter()
                 .map(|line| primitive::line::Line {
                     notes: line.notes.clone(),
-                    events: line.events.iter().map(|x| (*x).into()).collect(),
+                    // Bug audit #9: LineEvent is no longer Copy (it may hold
+                    // an owned String for text events), so clone instead of
+                    // deref when converting each to the primitive form.
+                    events: line.events.iter().map(|x| x.clone().into()).collect(),
                 })
                 .collect(),
             ..Default::default()
@@ -126,30 +129,50 @@ impl Default for SerializedLine {
                     value: LineEventValue::constant(0.0),
                     start_beat: Beat::ZERO,
                     end_beat: Beat::ONE,
+                    easing_left: None,
+                    easing_right: None,
+                    linkgroup: None,
+                    font: None,
                 },
                 LineEvent {
                     kind: LineEventKind::Y,
                     value: LineEventValue::constant(0.0),
                     start_beat: Beat::ZERO,
                     end_beat: Beat::ONE,
+                    easing_left: None,
+                    easing_right: None,
+                    linkgroup: None,
+                    font: None,
                 },
                 LineEvent {
                     kind: LineEventKind::Rotation,
                     value: LineEventValue::constant(0.0),
                     start_beat: Beat::ZERO,
                     end_beat: Beat::ONE,
+                    easing_left: None,
+                    easing_right: None,
+                    linkgroup: None,
+                    font: None,
                 },
                 LineEvent {
                     kind: LineEventKind::Opacity,
                     value: LineEventValue::constant(255.0),
                     start_beat: Beat::ZERO,
                     end_beat: Beat::ONE,
+                    easing_left: None,
+                    easing_right: None,
+                    linkgroup: None,
+                    font: None,
                 },
                 LineEvent {
                     kind: LineEventKind::Speed,
                     value: LineEventValue::constant(10.0),
                     start_beat: Beat::ZERO,
                     end_beat: Beat::ONE,
+                    easing_left: None,
+                    easing_right: None,
+                    linkgroup: None,
+                    font: None,
                 },
             ],
             children: vec![],

@@ -469,7 +469,7 @@ export function evaluateAnimatedVariable(variable: AnimatedVariable, beat: numbe
  * Evaluate an animated variable that produces a vector value (vec2/vec3/vec4).
  * Each animation event may have array start/end values — interpolates each component.
  */
-function evaluateAnimatedVariableVec(variable: AnimatedVariable, beat: number, components: number): number[] {
+export function evaluateAnimatedVariableVec(variable: AnimatedVariable, beat: number, components: number): number[] {
   if (typeof variable === "number") {
     return Array(components).fill(variable);
   }

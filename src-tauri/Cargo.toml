@@ -27,8 +27,37 @@ serde_json = "1.0"
 # Error handling
 anyhow = "1.0"
 
-# Audio analysis (spectrogram FFT)
+# Audio analysis (spectrogram FFT — used by onset_ml.rs for mel spectrogram)
 realfft = "3.5.0"
+
+# ML onset detection pipeline (onset_ml.rs)
+# Audio decoding — pure Rust, no FFmpeg dependency
+symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "aac"] }
+# High-quality audio resampling (sinc interpolation, 48kHz→44.1kHz)
+rubato = "0.16"
+# ML inference via ONNX Runtime — runs the madmom CNN onset model
+ort = { version = "=2.0.0-rc.12", features = ["download-binaries"] }
+# N-dimensional arrays for ONNX tensor I/O (version must match ort's ndarray dep)
+ndarray = "0.17"
+
+# HTTP client for AI proxy (proxies requests to local inference servers)
+# "stream" feature enables bytes_stream() for SSE streaming responses
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Stream combinators (for StreamExt::next() in SSE parsing)
+futures-util = "0.3"
+
+# Parallel iterators for multi-core spectrogram computation
+rayon = "1.10"
 
 # Logging
 tracing = "0.1"
+
+# ── Dev build optimization ──────────────────────────────────────
+# Optimize ALL dependency crates in dev builds (ort, realfft, rubato,
+# ndarray, symphonia). App code stays at opt-level 0 for fast compile
+# and debuggable stack traces. This alone drops the onset pipeline
+# from ~2 minutes to ~2-5 seconds because the numerically heavy
+# crates get LLVM-optimized.
+[profile.dev.package."*"]
+opt-level = 2

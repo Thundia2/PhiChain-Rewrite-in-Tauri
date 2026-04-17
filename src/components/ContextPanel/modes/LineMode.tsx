@@ -17,6 +17,7 @@ import { EVENT_KIND_META, EXTENDED_EVENT_KINDS } from "../../../constants/eventC
 import { getEasingLabel, getEventValueSummary, formatBeat } from "../../../utils/eventHelpers";
 import { NumericInput } from "../../common/FormFields";
 import { validateExpression } from "../../../utils/notePatternGenerator";
+import { XGridSection } from "../shared/XGridSection";
 
 // ---- Extracted tab components ----
 import { ControlsTab } from "./LineModeControlsTab";
@@ -182,8 +183,7 @@ function PatternConfigBanner() {
 
 function EventsTab() {
   const selectedLineIndex = useEditorStore((s) => s.selectedLineIndex);
-  const xSnapEnabled = useEditorStore((s) => s.xSnapEnabled);
-  const lanesVal = useEditorStore((s) => s.lanes);
+  // xSnapEnabled and verticalLines are handled by XGridSection internally
   const lines = useChartStore((s) => s.chart.lines);
   const addEvent = useChartStore((s) => s.addEvent);
 
@@ -268,35 +268,9 @@ function EventsTab() {
         )}
       </div>
 
-      {/* X Snap — toggle and lane presets (reactive via hook subscriptions) */}
-      <SectionHeader label="X SNAP" />
-      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-        <button onClick={() => useEditorStore.getState().toggleXSnap()} style={{
-          flex: 1, fontSize: 9, padding: "4px 0", borderRadius: 3,
-          border: "none", cursor: "pointer", fontFamily: "inherit",
-          background: xSnapEnabled ? "#8b5cf618" : "var(--bg-active)",
-          color: xSnapEnabled ? "#8b5cf6" : "var(--text-muted)",
-          fontWeight: xSnapEnabled ? 700 : 400,
-        }}>
-          {xSnapEnabled ? `Snap ON (${lanesVal})` : "Snap OFF"}
-        </button>
-        {([9, 18, 30] as const).map((n) => {
-          const isActive = xSnapEnabled && lanesVal === n;
-          return (
-            <button key={n} onClick={() => {
-              useEditorStore.getState().setLanes(n);
-              if (!useEditorStore.getState().xSnapEnabled) useEditorStore.getState().toggleXSnap();
-            }} style={{
-              width: 36, fontSize: 9, padding: "4px 0", borderRadius: 3,
-              border: "none", cursor: "pointer", fontFamily: "inherit",
-              background: isActive ? "#8b5cf6" : "var(--bg-active)",
-              color: isActive ? "#fff" : "var(--text-muted)",
-            }}>
-              {n}
-            </button>
-          );
-        })}
-      </div>
+      {/* X Grid — shared toggle, presets, and status indicator */}
+      <SectionHeader label="X GRID" />
+      <XGridSection />
 
       {/* Curve Editor — open the popout curve editor for this line's events */}
       <SectionHeader label="CURVE EDITOR" />

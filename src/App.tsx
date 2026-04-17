@@ -56,7 +56,6 @@ import { GoToBeatDialog } from "./components/GoToBeatDialog/GoToBeatDialog";
 import { ExportDiffDialog } from "./components/ExportDiffDialog/ExportDiffDialog";
 import { SelectiveExportDialog } from "./components/SelectiveExportDialog/SelectiveExportDialog";
 import { RecordReviewDialog } from "./components/RecordReviewDialog/RecordReviewDialog";
-import { CalibrationDialog } from "./components/CalibrationDialog/CalibrationDialog";
 import { ContextPanelSidebar } from "./components/ContextPanel/ContextPanelSidebar";
 import { FavoritesWizard } from "./components/ContextPanel/wizard/FavoritesWizard";
 import { useEditorStore } from "./stores/editorStore";
@@ -218,7 +217,6 @@ export default function App() {
   const showExportDiff = useDialogStore((s) => s.openDialogs.has("export-diff"));
   const showSelectiveExport = useDialogStore((s) => s.openDialogs.has("selective-export"));
   const showRecordReview = useDialogStore((s) => s.openDialogs.has("record-review"));
-  const showOnsetCalibration = useDialogStore((s) => s.openDialogs.has("onset-calibration"));
   const showSettings = useDialogStore((s) => s.openDialogs.has("settings"));
   const showCommandPalette = useDialogStore((s) => s.openDialogs.has("command-palette"));
   const [expandedPanelId, setExpandedPanelId] = useState<PanelId | null>(null);
@@ -512,7 +510,6 @@ export default function App() {
       <ExportDiffDialog open={showExportDiff} onClose={() => closeDialog("export-diff")} />
       <SelectiveExportDialog open={showSelectiveExport} onClose={() => closeDialog("selective-export")} />
       <RecordReviewDialog open={showRecordReview} onClose={() => closeDialog("record-review")} onAccept={() => closeDialog("record-review")} />
-      <CalibrationDialog open={showOnsetCalibration} onClose={() => closeDialog("onset-calibration")} />
       <CommandPalette
         open={showCommandPalette}
         onClose={() => closeDialog("command-palette")}

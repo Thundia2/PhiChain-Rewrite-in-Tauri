@@ -39,6 +39,7 @@ import { HotkeyButton } from "../shared/HotkeyButton";
 import { SectionHeader } from "../shared/SectionHeader";
 import { ActionButton } from "../shared/ActionButton";
 import { ContextBadge } from "../shared/ContextBadge";
+import { XGridSection } from "../shared/XGridSection";
 
 // ---- Tool grid data ----
 
@@ -159,8 +160,7 @@ export function GlobalMode({ activeTab, ...actionProps }: GlobalModeProps) {
 function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setTool = useEditorStore((s) => s.setTool);
-  const xSnapEnabled = useEditorStore((s) => s.xSnapEnabled);
-  const lanes = useEditorStore((s) => s.lanes);
+  // xSnapEnabled and verticalLines are handled by XGridSection internally
   const showSpectrogram = useEditorStore((s) => s.showSpectrogram);
   const spectrogramOpacity = useEditorStore((s) => s.spectrogramOpacity);
   const noteSideFilter = useEditorStore((s) => s.noteSideFilter);
@@ -170,7 +170,6 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
   const onsetOpacity = useSettingsStore((s) => s.onsetOpacity);
   const onsetSnapToGrid = useSettingsStore((s) => s.onsetSnapToGrid);
   const onsetAnalyzing = useEditorStore((s) => s.onsetAnalyzing);
-  const musicLoaded = useAudioStore((s) => s.musicLoaded);
   const recordMode = useEditorStore((s) => s.recordMode);
   const recordModeChannels = useEditorStore((s) => s.recordModeChannels);
   const timelineZoom = useEditorStore((s) => s.timelineZoom);
@@ -306,35 +305,9 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
       <SectionHeader label="SELECT BY RANGE" />
       <SelectByRangeSection />
 
-      {/* X Snap — toggle and lane presets (reactive via hook subscriptions) */}
-      <SectionHeader label="X SNAP" />
-      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-        <button onClick={() => useEditorStore.getState().toggleXSnap()} style={{
-          flex: 1, fontSize: 9, padding: "4px 0", borderRadius: 3,
-          border: "none", cursor: "pointer", fontFamily: "inherit",
-          background: xSnapEnabled ? "#8b5cf618" : "var(--bg-active)",
-          color: xSnapEnabled ? "#8b5cf6" : "var(--text-muted)",
-          fontWeight: xSnapEnabled ? 700 : 400,
-        }}>
-          {xSnapEnabled ? `Snap ON (${lanes})` : "Snap OFF"}
-        </button>
-        {([9, 18, 30] as const).map((n) => {
-          const isActive = xSnapEnabled && lanes === n;
-          return (
-            <button key={n} onClick={() => {
-              useEditorStore.getState().setLanes(n);
-              if (!useEditorStore.getState().xSnapEnabled) useEditorStore.getState().toggleXSnap();
-            }} style={{
-              width: 36, fontSize: 9, padding: "4px 0", borderRadius: 3,
-              border: "none", cursor: "pointer", fontFamily: "inherit",
-              background: isActive ? "#8b5cf6" : "var(--bg-active)",
-              color: isActive ? "#fff" : "var(--text-muted)",
-            }}>
-              {n}
-            </button>
-          );
-        })}
-      </div>
+      {/* X Grid — shared toggle, presets, and status indicator */}
+      <SectionHeader label="X GRID" />
+      <XGridSection />
 
       {/* ---- BEAT GRID — perpendicular beat grid overlay ---- */}
       <SectionHeader label="BEAT GRID" />
@@ -426,23 +399,6 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
             />
           )}
         </div>
-        {onsetEnabled && (
-          <button
-            onClick={() => useDialogStore.getState().openDialog("onset-calibration")}
-            disabled={!musicLoaded}
-            style={{
-              fontSize: 9, padding: "4px 10px", borderRadius: 4,
-              border: "1px solid rgba(255, 168, 50, 0.3)",
-              background: "rgba(255, 168, 50, 0.08)",
-              color: musicLoaded ? "#ffa832" : "var(--text-muted)",
-              cursor: musicLoaded ? "pointer" : "default",
-              fontFamily: "inherit", fontWeight: 600,
-              opacity: musicLoaded ? 1 : 0.4,
-            }}
-          >
-            {"Calibrate\u2026"}
-          </button>
-        )}
         {onsetEnabled && (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 8, color: "var(--text-muted)" }}>Opacity</span>

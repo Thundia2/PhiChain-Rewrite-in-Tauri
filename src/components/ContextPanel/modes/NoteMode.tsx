@@ -341,7 +341,7 @@ function BatchTab() {
       return;
     }
     // Apply incremental X offset to each successive note (fan/stagger pattern)
-    // Stagger amount: 30 units per note (half a lane at 9 lanes)
+    // Stagger amount: 30 units per note (fixed offset, ~half spacing at N=21)
     const strumStep = 30;
     const sorted = [...g.sel].sort((a, b) => beatToFloat(a.note.beat) - beatToFloat(b.note.beat));
     const centerX = sorted.reduce((sum, s) => sum + s.note.x, 0) / sorted.length;
@@ -446,9 +446,9 @@ function BatchTab() {
 
   const handleShiftX = () => {
     const g = guard(); if (!g) return;
-    // Shift all selected notes' X by one grid step (675 / lanes)
-    const lanes = useEditorStore.getState().lanes;
-    const gridStep = Math.round(1350 / lanes); // Full X range is -675 to +675 = 1350
+    // Shift all selected notes' X by one grid step: 1350 / (N-1)
+    const vl = useEditorStore.getState().verticalLines;
+    const gridStep = vl >= 2 ? Math.round(1350 / (vl - 1)) : 0; // Full X range is -675 to +675 = 1350
     useChartStore.getState().batchEditNotes(g.lineIdx,
       g.sel.map(({ note, index }) => ({ noteIndex: index, changes: { x: note.x + gridStep } }))
     );

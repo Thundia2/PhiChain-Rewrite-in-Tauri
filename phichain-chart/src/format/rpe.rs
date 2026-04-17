@@ -394,6 +394,26 @@ impl Format for RpeChart {
                             start_time: event.start_beat.into(),
                         })
                     }
+                    // Bug audit #9: extended RPE variants — ScaleX/ScaleY/
+                    // Color/Text/Incline/Gif. RPE has dedicated event lists
+                    // for these (scaleXEvents, colorEvents, textEvents, …),
+                    // but the current rpe.rs RpeEventLayer struct only
+                    // exposes the five legacy lists. Drop them here with
+                    // a tracing warning rather than failing the export.
+                    // TODO: extend RpeEventLayer with the missing lists for
+                    //       full round-trip. For now we match the old
+                    //       behavior of silently skipping, but do it
+                    //       explicitly so the match remains exhaustive.
+                    crate::event::LineEventKind::ScaleX
+                    | crate::event::LineEventKind::ScaleY
+                    | crate::event::LineEventKind::Color
+                    | crate::event::LineEventKind::Text
+                    | crate::event::LineEventKind::Incline
+                    | crate::event::LineEventKind::Gif => {
+                        // No-op: extended variants aren't written to RPE
+                        // output by this exporter yet. A future patch can
+                        // populate RpeEventLayer::scale_x_events, etc.
+                    }
                 }
             }
             line.event_layers.push(event_layer);

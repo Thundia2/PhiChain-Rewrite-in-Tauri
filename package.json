@@ -25,6 +25,7 @@
     "immer": "^11.1.4",
     "jszip": "^3.10.1",
     "music-metadata": "^11.12.3",
+    "pixi.js": "^8.18.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hotkeys-hook": "^5.2.4",

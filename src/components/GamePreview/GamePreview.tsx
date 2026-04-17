@@ -1,8 +1,12 @@
 // ============================================================
 // Game Preview Component
 //
-// Recent change: Added effectiveOffset (chart.offset + audioLatencyMs)
-// to shift game preview visuals for audio latency compensation.
+// Recent change (bug audit #6): Hardened line-texture async loading.
+//   - img.onerror now revokes the blob URL and drops the bookkeeping
+//     entry so malformed textures don't leak their URLs forever.
+//   - img.onload is guarded by a cancellation flag that flips on
+//     effect cleanup, preventing a late-firing onload from calling
+//     loadLineTexture() on a disposed Pixi app or stale renderer.
 //
 // A live canvas preview of the chart. Reads from all stores
 // and renders each frame using the GameRenderer.
@@ -21,6 +25,8 @@ import { useEditorStore } from "../../stores/editorStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useRespackStore } from "../../stores/respackStore";
 import { GameRenderer } from "../../canvas/gameRenderer";
+// PAUSED / ON HOLD — GPU renderer, feature-flagged behind usePixiRenderer (default: false)
+import { PixiGameRenderer } from "../../canvas/pixi";
 import { HitEffectManager } from "../../canvas/hitEffects";
 import { PostProcessPipeline } from "../../canvas/postProcess";
 import { VideoBackgroundManager } from "../../canvas/videoBackground";
@@ -30,8 +36,11 @@ import { BpmList } from "../../utils/bpmList";
 export function GamePreview() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // Canvas 2D overlay for hit effects (Pixi mode)
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
+  const pixiRendererRef = useRef<PixiGameRenderer | null>(null);
+  const usePixiRef = useRef(false); // Tracks which renderer is active
   const hitEffectRef = useRef(new HitEffectManager());
   const postProcessRef = useRef<PostProcessPipeline>(new PostProcessPipeline());
   const videoBackgroundRef = useRef<VideoBackgroundManager>(new VideoBackgroundManager());
@@ -80,11 +89,29 @@ export function GamePreview() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    // Check if GPU renderer is enabled
+    const ss = useSettingsStore.getState();
+    usePixiRef.current = ss.usePixiRenderer;
 
-    rendererRef.current = new GameRenderer(ctx);
-    resizeCanvas();
+    if (ss.usePixiRenderer) {
+      // Initialize PixiJS GPU renderer — pass the container div, not the canvas.
+      // Pixi creates its own canvas to avoid WebGL context corruption on
+      // React Strict Mode double-mounts.
+      const pixi = new PixiGameRenderer();
+      pixiRendererRef.current = pixi;
+      rendererRef.current = null; // Don't use Canvas 2D renderer
+
+      const containerEl = containerRef.current;
+      if (!containerEl) return;
+      pixi.init(containerEl);
+    } else {
+      // Initialize Canvas 2D renderer (original path)
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      rendererRef.current = new GameRenderer(ctx);
+      pixiRendererRef.current = null;
+      resizeCanvas();
+    }
 
     // Initialize WebGL post-processing overlay
     const glCanvas = glCanvasRef.current;
@@ -102,7 +129,12 @@ export function GamePreview() {
     let observer: ResizeObserver | null = null;
     if (container) {
       observer = new ResizeObserver(() => {
-        resizeCanvas();
+        if (usePixiRef.current && pixiRendererRef.current) {
+          const rect = container.getBoundingClientRect();
+          pixiRendererRef.current.resize(rect.width, rect.height);
+        } else {
+          resizeCanvas();
+        }
       });
       observer.observe(container);
     }
@@ -113,6 +145,7 @@ export function GamePreview() {
     const hitSound = hitSoundRef.current;
     const textureUrls = textureUrlsRef.current;
     const loadedTextures = loadedTexturesRef.current;
+    const pixiRenderer = pixiRendererRef.current;
 
     return () => {
       observer?.disconnect();
@@ -120,6 +153,7 @@ export function GamePreview() {
       postProcess.dispose();
       videoBackground.unload();
       hitSound.dispose();
+      pixiRenderer?.destroy();
       // Revoke texture object URLs
       for (const url of textureUrls.values()) {
         URL.revokeObjectURL(url);
@@ -131,13 +165,22 @@ export function GamePreview() {
 
   // ---- Render loop ----
   useEffect(() => {
-    const renderer = rendererRef.current;
-    if (!renderer) return;
+    // At least one renderer must be available
+    if (!rendererRef.current && !pixiRendererRef.current) return;
+
+    // Bug audit #6: cancellation flag for async texture loads.
+    // When the component unmounts (or re-runs this effect), any
+    // in-flight Image decode must NOT call into the renderer — by
+    // that point the renderer may be a destroyed Pixi app, and
+    // calling loadLineTexture() on it throws a WebGL error.
+    let cancelled = false;
 
     function frame() {
       const canvas = canvasRef.current;
       const container = containerRef.current;
-      if (!canvas || !container || !renderer) return;
+      const renderer = rendererRef.current;
+      const pixiRenderer = pixiRendererRef.current;
+      if (!canvas || !container || (!renderer && !pixiRenderer)) return;
 
       const rect = container.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) {
@@ -175,16 +218,18 @@ export function GamePreview() {
       // Reset hit effects on seek/stop
       if (wasPlayingRef.current && !isPlaying) {
         hitEffectRef.current.reset();
+        pixiRendererRef.current?.resetHitEffects();
       }
       if (!wasPlayingRef.current && isPlaying) {
         hitEffectRef.current.reset();
+        pixiRendererRef.current?.resetHitEffects();
         es.resetFcValid();
       }
       wasPlayingRef.current = isPlaying;
 
-      // Update hit effect config from respack
+      // Update hit effect config from respack (both Canvas 2D manager and Pixi layer)
       if (activeRespack?.textures.hitFx && activeRespack.config.hitFx) {
-        hitEffectRef.current.setConfig({
+        const hitEffectConfig = {
           spriteSheet: activeRespack.textures.hitFx,
           cols: activeRespack.config.hitFx[0],
           rows: activeRespack.config.hitFx[1],
@@ -193,21 +238,48 @@ export function GamePreview() {
           rotate: activeRespack.config.hitFxRotate ?? false,
           hideParticles: activeRespack.config.hideParticles ?? false,
           tinted: activeRespack.config.hitFxTinted ?? true,
-        });
+        };
+        hitEffectRef.current.setConfig(hitEffectConfig);
+        pixiRendererRef.current?.setHitEffectConfig(hitEffectConfig);
       } else {
         hitEffectRef.current.setConfig(null);
+        pixiRendererRef.current?.setHitEffectConfig(null);
       }
 
-      // Load line textures into the renderer cache
+      // Load line textures into the active renderer's cache.
+      //
+      // Bug audit #6: defensive async loading.
+      //   - onload: check the `cancelled` flag and re-resolve the active
+      //     renderer at callback time (the captured one may be stale).
+      //   - onerror: revoke the URL and undo the bookkeeping so a
+      //     malformed texture can be retried on the next frame instead
+      //     of being silently stuck with a leaked URL.
+      const activeRenderer = renderer || pixiRenderer;
       const lineTextures = cs.lineTextures;
       for (const [texName, texBlob] of lineTextures) {
-        if (!loadedTexturesRef.current.has(texName) && !renderer.hasLineTexture(texName)) {
+        if (!loadedTexturesRef.current.has(texName) && activeRenderer && !activeRenderer.hasLineTexture(texName)) {
           loadedTexturesRef.current.add(texName);
           const url = URL.createObjectURL(texBlob);
           textureUrlsRef.current.set(texName, url);
           const img = new Image();
           img.onload = () => {
-            renderer.loadLineTexture(texName, img);
+            if (cancelled) return;
+            // Re-resolve the renderer at callback time — the one we
+            // captured in `activeRenderer` may have been replaced.
+            const r = rendererRef.current || pixiRendererRef.current;
+            if (!r) return;
+            try {
+              r.loadLineTexture(texName, img);
+            } catch (err) {
+              // Renderer was destroyed between our guards and this call,
+              // or the texture is malformed. Don't bring down the frame loop.
+              console.warn(`Failed to load line texture "${texName}":`, err);
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            textureUrlsRef.current.delete(texName);
+            loadedTexturesRef.current.delete(texName);
           };
           img.src = url;
         }
@@ -227,9 +299,10 @@ export function GamePreview() {
       // Compute current beat for shader effects
       const currentBeat = bpmList.beatAtFloat(latestTime - effectiveOffset);
 
-      // Draw video background if configured
+      // Draw video background if configured (Canvas 2D mode only —
+      // Pixi mode handles video via texture in a future phase)
       const extraConfig = cs.extraConfig;
-      if (extraConfig.videos && extraConfig.videos.length > 0) {
+      if (!pixiRenderer && extraConfig.videos && extraConfig.videos.length > 0) {
         const ctx2d = canvas.getContext("2d");
         if (ctx2d) {
           const dpr = window.devicePixelRatio || 1;
@@ -238,40 +311,66 @@ export function GamePreview() {
         }
       }
 
-      renderer.render(
-        cs.chart.lines,
-        bpmList,
-        latestTime,
-        effectiveOffset,
-        rect.width,
-        rect.height,
-        {
-          noteSize: ss.noteSize,
-          backgroundDim: ss.backgroundDim,
-          illustrationImage: cs.illustrationImage,
-          selectedLineIndex: es.selectedLineIndex,
-          selectedNoteIndices: es.selectedNoteIndices,
-          showFcApIndicator: ss.showFcApIndicator,
-          isFcValid: es.isFcValid,
-          multiHighlight: ss.multiHighlight,
-          anchorMarkerVisibility: ss.anchorMarkerVisibility,
-          showHud: ss.showHud,
-          chartName: cs.meta.name,
-          chartLevel: cs.meta.level,
-          hitEffectManager: hitEffectRef.current,
-          isPlaying,
-          showHitEffects: ss.showHitEffects,
-          pendingNote: es.pendingNote,
-          pendingLineIndex: es.selectedLineIndex,
-          respack: activeRespack,
-          chartFontFamily: cs.chartFontFamily,
-        },
-      );
+      // Render options shared by both renderers
+      const renderOptions = {
+        noteSize: ss.noteSize,
+        backgroundDim: ss.backgroundDim,
+        illustrationImage: cs.illustrationImage,
+        selectedLineIndex: es.selectedLineIndex,
+        selectedNoteIndices: es.selectedNoteIndices,
+        showFcApIndicator: ss.showFcApIndicator,
+        isFcValid: es.isFcValid,
+        multiHighlight: ss.multiHighlight,
+        anchorMarkerVisibility: ss.anchorMarkerVisibility,
+        showHud: ss.showHud,
+        chartName: cs.meta.name,
+        chartLevel: cs.meta.level,
+        hitEffectManager: hitEffectRef.current,
+        isPlaying,
+        showHitEffects: ss.showHitEffects,
+        pendingNote: es.pendingNote,
+        pendingLineIndex: es.selectedLineIndex,
+        respack: activeRespack,
+        chartFontFamily: cs.chartFontFamily,
+      };
+
+      if (pixiRenderer && pixiRenderer.initialized) {
+        // GPU renderer path
+        pixiRenderer.render(
+          cs.chart.lines, bpmList, latestTime, effectiveOffset,
+          rect.width, rect.height, renderOptions,
+        );
+
+        // Hit effects are rendered on a Canvas 2D overlay in Pixi mode
+        const overlayCanvas = overlayCanvasRef.current;
+        if (overlayCanvas && isPlaying && ss.showHitEffects) {
+          const dpr = window.devicePixelRatio || 1;
+          overlayCanvas.width = rect.width * dpr;
+          overlayCanvas.height = rect.height * dpr;
+          overlayCanvas.style.width = `${rect.width}px`;
+          overlayCanvas.style.height = `${rect.height}px`;
+          const overlayCtx = overlayCanvas.getContext("2d");
+          if (overlayCtx) {
+            overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            overlayCtx.clearRect(0, 0, rect.width, rect.height);
+            hitEffectRef.current.render(overlayCtx, latestTime - effectiveOffset);
+          }
+        }
+      } else if (renderer) {
+        // Canvas 2D renderer path (original)
+        renderer.render(
+          cs.chart.lines, bpmList, latestTime, effectiveOffset,
+          rect.width, rect.height, renderOptions,
+        );
+      }
 
       // Apply post-processing shader effects
-      if (extraConfig.effects && extraConfig.effects.length > 0 && postProcessRef.current.initialized) {
+      if (pixiRenderer && pixiRenderer.initialized) {
+        // Pixi mode: apply effects as stage filters (single WebGL context)
+        pixiRenderer.applyShaderEffects(extraConfig.effects, currentBeat, latestTime, rect.width, rect.height);
+      } else if (extraConfig.effects && extraConfig.effects.length > 0 && postProcessRef.current.initialized) {
+        // Canvas 2D mode: use separate WebGL overlay
         postProcessRef.current.render(canvas, extraConfig.effects, currentBeat, latestTime);
-        // Show/hide GL canvas based on whether effects are active
         const glCanvas = glCanvasRef.current;
         if (glCanvas) {
           glCanvas.style.display = postProcessRef.current.active ? "block" : "none";
@@ -285,15 +384,20 @@ export function GamePreview() {
     }
 
     rafRef.current = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(rafRef.current);
+    return () => {
+      // Bug audit #6: flip the cancellation flag so any in-flight
+      // Image decodes don't touch the renderer after unmount.
+      cancelled = true;
+      cancelAnimationFrame(rafRef.current);
+    };
   }, []); // Empty deps — loop reads from stores directly
 
   // ---- Click to select line ----
   const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    const renderer = rendererRef.current;
-    if (!canvas || !container || !renderer) return;
+    const activeRenderer = rendererRef.current || pixiRendererRef.current;
+    if (!canvas || !container || !activeRenderer) return;
 
     const rect = container.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
@@ -307,7 +411,7 @@ export function GamePreview() {
     // Use effectiveOffset so click-to-select matches the latency-shifted visuals
     const effectiveOffset = cs.chart.offset + useSettingsStore.getState().audioLatencyMs / 1000;
     const currentBeat = bpmList.beatAtFloat(currentTime - effectiveOffset);
-    const hitIndex = renderer.hitTestLine(
+    const hitIndex = activeRenderer.hitTestLine(
       cs.chart.lines, currentBeat, clickX, clickY, rect.width, rect.height,
     );
 
@@ -326,6 +430,11 @@ export function GamePreview() {
         ref={canvasRef}
         className="absolute inset-0"
         onClick={handleClick}
+      />
+      {/* Canvas 2D overlay for hit effects when using Pixi renderer */}
+      <canvas
+        ref={overlayCanvasRef}
+        className="absolute inset-0 pointer-events-none"
       />
       {/* WebGL overlay canvas for post-processing shader effects */}
       <canvas

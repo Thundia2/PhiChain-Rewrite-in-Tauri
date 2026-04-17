@@ -4,8 +4,10 @@
 // Manages browser-like tabs: Home, Chart(s), Line Event Editor, Panels.
 // Home tab is always present and not closable.
 //
-// Recent change: Added openUnrolledLineEditor() for per-line
-// unrolled editor tabs. closeTab now cleans up per-tab state.
+// Recent change: Added renamingTabId state + startRenameTab() /
+// clearRenaming() for inline tab rename triggered from command
+// palette (F2) or double-click. Also cleaned up per-line label
+// to remove redundant "Unrolled:" prefix (badge now shows type).
 //
 // Usage:
 //   const tabs = useTabStore(s => s.tabs);
@@ -48,6 +50,14 @@ export interface TabState {
 
   /** Get the tab ID that would be used for a given chartId under current settings */
   getChartTabId: (chartId: string) => string;
+
+  // ---- Inline rename ----
+  /** ID of the tab currently being renamed (null if none) */
+  renamingTabId: string | null;
+  /** Enter rename mode for a tab. Defaults to active tab. Only closable tabs allowed. */
+  startRenameTab: (tabId?: string) => void;
+  /** Exit rename mode without committing */
+  clearRenaming: () => void;
 }
 
 const HOME_TAB: Tab = { id: "home", type: "home", label: "Home", closable: false };
@@ -204,7 +214,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
     get().openTab({
       id: `unrolled-line:${lineIndex}`,
       type: "unrolled_editor",
-      label: `Unrolled: ${lineName}`,
+      label: lineName,
       closable: true,
       data: { lineIndex },
     });
@@ -216,4 +226,18 @@ export const useTabStore = create<TabState>()((set, get) => ({
     if (defaultView === "unrolled") return `unrolled:${chartId}`;
     return `chart:${chartId}`;
   },
+
+  // ---- Inline rename ----
+  renamingTabId: null,
+
+  startRenameTab: (tabId) => {
+    const { tabs, activeTabId } = get();
+    const targetId = tabId ?? activeTabId;
+    const tab = tabs.find((t) => t.id === targetId);
+    // Only allow renaming closable (non-system) tabs
+    if (!tab || !tab.closable) return;
+    set({ renamingTabId: targetId });
+  },
+
+  clearRenaming: () => set({ renamingTabId: null }),
 }));

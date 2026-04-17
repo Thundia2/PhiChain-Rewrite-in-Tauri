@@ -30,6 +30,8 @@ import { useRespackStore } from "../../stores/respackStore";
 import { useGroupStore } from "../../stores/groupStore";
 import { useBookmarkStore } from "../../stores/bookmarkStore";
 import { GameRenderer, type RenderResult, type RenderedLineInfo } from "../../canvas/gameRenderer";
+// PAUSED / ON HOLD — GPU renderer, feature-flagged behind usePixiRenderer (default: false)
+import { PixiGameRenderer } from "../../canvas/pixi";
 import { HitEffectManager } from "../../canvas/hitEffects";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat, floatToBeat, CANVAS_WIDTH } from "../../types/chart";
@@ -100,8 +102,11 @@ import {
 
 export function UnifiedCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // Canvas 2D overlay for handles/selection (Pixi mode)
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
+  const pixiRendererRef = useRef<PixiGameRenderer | null>(null);
+  const usePixiRef = useRef(false); // Tracks which renderer is active
   const hitEffectRef = useRef(new HitEffectManager());
   const rafRef = useRef<number>(0);
   const wasPlayingRef = useRef(false);
@@ -179,36 +184,85 @@ export function UnifiedCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    // Check if GPU renderer is enabled
+    const ss = useSettingsStore.getState();
+    usePixiRef.current = ss.usePixiRenderer;
 
-    rendererRef.current = new GameRenderer(ctx);
-    resizeCanvas();
+    if (ss.usePixiRenderer) {
+      // Initialize PixiJS GPU renderer — pass the container div, not the canvas.
+      // Pixi creates its own canvas to avoid WebGL context corruption on
+      // React Strict Mode double-mounts.
+      const pixi = new PixiGameRenderer();
+      pixiRendererRef.current = pixi;
+      rendererRef.current = null;
+
+      const containerEl = containerRef.current;
+      if (!containerEl) return;
+      pixi.init(containerEl);
+
+      // Also set up the overlay canvas for Canvas 2D drawing
+      const overlay = overlayCanvasRef.current;
+      if (overlay) {
+        const container = containerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          overlay.width = rect.width * dpr;
+          overlay.height = rect.height * dpr;
+          overlay.style.width = `${rect.width}px`;
+          overlay.style.height = `${rect.height}px`;
+        }
+      }
+    } else {
+      // Initialize Canvas 2D renderer (original path)
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      rendererRef.current = new GameRenderer(ctx);
+      pixiRendererRef.current = null;
+      resizeCanvas();
+    }
 
     const container = containerRef.current;
     let observer: ResizeObserver | null = null;
     if (container) {
       observer = new ResizeObserver(() => {
-        resizeCanvas();
+        if (usePixiRef.current && pixiRendererRef.current) {
+          const rect = container.getBoundingClientRect();
+          pixiRendererRef.current.resize(rect.width, rect.height);
+          // Also resize overlay canvas
+          const overlay = overlayCanvasRef.current;
+          if (overlay) {
+            const dpr = window.devicePixelRatio || 1;
+            overlay.width = rect.width * dpr;
+            overlay.height = rect.height * dpr;
+            overlay.style.width = `${rect.width}px`;
+            overlay.style.height = `${rect.height}px`;
+          }
+        } else {
+          resizeCanvas();
+        }
       });
       observer.observe(container);
     }
 
+    const pixiRenderer = pixiRendererRef.current;
     return () => {
       observer?.disconnect();
       cancelAnimationFrame(rafRef.current);
+      pixiRenderer?.destroy();
     };
   }, [resizeCanvas]);
 
   // ---- Render loop ----
   useEffect(() => {
-    const renderer = rendererRef.current;
-    if (!renderer) return;
+    if (!rendererRef.current && !pixiRendererRef.current) return;
 
     function frame() {
       const canvas = canvasRef.current;
       const container = containerRef.current;
-      if (!canvas || !container || !renderer) return;
+      const renderer = rendererRef.current;
+      const pixiRenderer = pixiRendererRef.current;
+      if (!canvas || !container || (!renderer && !pixiRenderer)) return;
 
       const rect = container.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) {
@@ -227,28 +281,28 @@ export function UnifiedCanvas() {
       // Reset hit effects on seek/stop
       if (wasPlayingRef.current && !isPlaying) {
         hitEffectRef.current.reset();
+        pixiRendererRef.current?.resetHitEffects();
       }
       if (!wasPlayingRef.current && isPlaying) {
         hitEffectRef.current.reset();
+        pixiRendererRef.current?.resetHitEffects();
         es.resetFcValid();
       }
       wasPlayingRef.current = isPlaying;
 
-      // Update hit effect config from respack
-      if (activeRespack?.textures.hitFx && activeRespack.config.hitFx) {
-        hitEffectRef.current.setConfig({
-          spriteSheet: activeRespack.textures.hitFx,
-          cols: activeRespack.config.hitFx[0],
-          rows: activeRespack.config.hitFx[1],
-          duration: activeRespack.config.hitFxDuration ?? 0.5,
-          scale: activeRespack.config.hitFxScale ?? 1.0,
-          rotate: activeRespack.config.hitFxRotate ?? false,
-          hideParticles: activeRespack.config.hideParticles ?? false,
-          tinted: activeRespack.config.hitFxTinted ?? true,
-        });
-      } else {
-        hitEffectRef.current.setConfig(null);
-      }
+      // Update hit effect config from respack (both Canvas 2D manager and Pixi layer)
+      const hitEffectConfig = (activeRespack?.textures.hitFx && activeRespack.config.hitFx) ? {
+        spriteSheet: activeRespack.textures.hitFx,
+        cols: activeRespack.config.hitFx[0],
+        rows: activeRespack.config.hitFx[1],
+        duration: activeRespack.config.hitFxDuration ?? 0.5,
+        scale: activeRespack.config.hitFxScale ?? 1.0,
+        rotate: activeRespack.config.hitFxRotate ?? false,
+        hideParticles: activeRespack.config.hideParticles ?? false,
+        tinted: activeRespack.config.hitFxTinted ?? true,
+      } : null;
+      hitEffectRef.current.setConfig(hitEffectConfig);
+      pixiRendererRef.current?.setHitEffectConfig(hitEffectConfig);
 
       // Rebuild BpmList if changed
       if (bpmListDataRef.current !== cs.chart.bpm_list) {
@@ -267,15 +321,16 @@ export function UnifiedCanvas() {
       }
       const hiddenLineIndices = hiddenSetRef.current;
 
-      // ---- Load line textures into renderer cache ----
+      // ---- Load line textures into active renderer cache ----
+      const activeRenderer = renderer || pixiRenderer;
       for (const line of cs.chart.lines) {
-        if (line.texture && !renderer.hasLineTexture(line.texture)) {
+        if (line.texture && activeRenderer && !activeRenderer.hasLineTexture(line.texture)) {
           const blob = cs.lineTextures.get(line.texture);
           if (blob) {
             const img = new Image();
             const url = URL.createObjectURL(blob);
             img.onload = () => {
-              renderer.loadLineTexture(line.texture!, img);
+              activeRenderer.loadLineTexture(line.texture!, img);
               URL.revokeObjectURL(url);
             };
             img.onerror = () => URL.revokeObjectURL(url);
@@ -284,74 +339,107 @@ export function UnifiedCanvas() {
         }
       }
 
-      // ---- Apply viewport transform ----
-      const ctx = canvas.getContext("2d");
+      // ---- Render options (shared by both renderers) ----
       const dpr = window.devicePixelRatio || 1;
       const vp = es.canvasViewport;
-
-      if (ctx) {
-        // Clear entire canvas in identity space first
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.restore();
-
-        // Apply DPR + viewport transform for all rendering
-        ctx.save();
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.translate(vp.offsetX, vp.offsetY);
-        ctx.scale(vp.zoom, vp.zoom);
-      }
 
       // Audio latency compensation for game preview visuals only.
       // Editor interaction helpers (getCurrentBeat/getCurrentTime) stay on raw chart.offset.
       const effectiveOffset = cs.chart.offset + ss.audioLatencyMs / 1000;
 
-      // Render and capture result for hit-testing
-      const renderResult = renderer.render(
-        cs.chart.lines,
-        bpmList,
-        latestTime,
-        effectiveOffset,
-        rect.width,
-        rect.height,
-        {
-          noteSize: ss.noteSize,
-          backgroundDim: ss.backgroundDim,
-          illustrationImage: cs.illustrationImage,
-          selectedLineIndex: es.selectedLineIndex,
-          selectedNoteIndices: es.selectedNoteIndices,
-          showFcApIndicator: ss.showFcApIndicator,
-          isFcValid: es.isFcValid,
-          multiHighlight: ss.multiHighlight,
-          anchorMarkerVisibility: ss.anchorMarkerVisibility,
-          showHud: ss.showHud,
-          chartName: cs.meta.name,
-          chartLevel: cs.meta.level,
-          hitEffectManager: hitEffectRef.current,
-          isPlaying,
-          showHitEffects: ss.showHitEffects,
-          pendingNote: es.pendingNote,
-          pendingLineIndex: es.selectedLineIndex,
-          respack: activeRespack,
-          hiddenLineIndices: hiddenLineIndices.size > 0 ? hiddenLineIndices : null,
-          multiSelectedLineIndices: es.multiSelectedLineIndices.length > 0 ? new Set(es.multiSelectedLineIndices) : null,
-          chartFontFamily: cs.chartFontFamily,
-          // Group editing mode
-          ...(() => {
-            const gs = useGroupStore.getState();
-            const activeGroup = gs.getActiveGroup();
-            if (!activeGroup || activeGroup.type !== "line") return {};
-            const memberIndices = new Set(activeGroup.lines.map((l: { lineIndex: number }) => l.lineIndex));
-            return {
-              groupMemberLineIndices: memberIndices,
-              groupDimFactor: gs.groupEditMode.hideOthers ? 0 : 0.15,
-              groupHideOthers: gs.groupEditMode.hideOthers,
-              groupSimplifiedCanvas: gs.groupEditMode.simplifiedCanvas,
-            };
-          })(),
-        },
-      );
+      const renderOptions = {
+        noteSize: ss.noteSize,
+        backgroundDim: ss.backgroundDim,
+        illustrationImage: cs.illustrationImage,
+        selectedLineIndex: es.selectedLineIndex,
+        selectedNoteIndices: es.selectedNoteIndices,
+        showFcApIndicator: ss.showFcApIndicator,
+        isFcValid: es.isFcValid,
+        multiHighlight: ss.multiHighlight,
+        anchorMarkerVisibility: ss.anchorMarkerVisibility,
+        showHud: ss.showHud,
+        chartName: cs.meta.name,
+        chartLevel: cs.meta.level,
+        hitEffectManager: hitEffectRef.current,
+        isPlaying,
+        showHitEffects: ss.showHitEffects,
+        pendingNote: es.pendingNote,
+        pendingLineIndex: es.selectedLineIndex,
+        respack: activeRespack,
+        hiddenLineIndices: hiddenLineIndices.size > 0 ? hiddenLineIndices : null,
+        multiSelectedLineIndices: es.multiSelectedLineIndices.length > 0 ? new Set(es.multiSelectedLineIndices) : null,
+        chartFontFamily: cs.chartFontFamily,
+        // Group editing mode
+        ...(() => {
+          const gs = useGroupStore.getState();
+          const activeGroup = gs.getActiveGroup();
+          if (!activeGroup || activeGroup.type !== "line") return {};
+          const memberIndices = new Set(activeGroup.lines.map((l: { lineIndex: number }) => l.lineIndex));
+          return {
+            groupMemberLineIndices: memberIndices,
+            groupDimFactor: gs.groupEditMode.hideOthers ? 0 : 0.15,
+            groupHideOthers: gs.groupEditMode.hideOthers,
+            groupSimplifiedCanvas: gs.groupEditMode.simplifiedCanvas,
+          };
+        })(),
+      };
+
+      let renderResult: RenderResult;
+      // In Pixi mode, ctx is from the overlay canvas (for overlays only)
+      // In Canvas 2D mode, ctx is from the main canvas (renders game + overlays)
+      let ctx: CanvasRenderingContext2D | null = null;
+
+      if (pixiRenderer && pixiRenderer.initialized) {
+        // ---- GPU renderer path ----
+        // Pixi renders the game scene (no viewport transform needed — Pixi handles it)
+        // Note: Viewport zoom/pan is applied to the Pixi stage
+        // For now, render at identity (viewport support is a future enhancement)
+        renderResult = pixiRenderer.render(
+          cs.chart.lines, bpmList, latestTime, effectiveOffset,
+          rect.width, rect.height, renderOptions,
+        );
+
+        // Get overlay canvas context for drawing handles, selection rects, etc.
+        const overlay = overlayCanvasRef.current;
+        if (overlay) {
+          ctx = overlay.getContext("2d");
+          if (ctx) {
+            // Clear overlay
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+            ctx.restore();
+            // Apply DPR + viewport transform
+            ctx.save();
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.translate(vp.offsetX, vp.offsetY);
+            ctx.scale(vp.zoom, vp.zoom);
+          }
+        }
+      } else if (renderer) {
+        // ---- Canvas 2D renderer path (original) ----
+        ctx = canvas.getContext("2d");
+
+        if (ctx) {
+          // Clear entire canvas in identity space first
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.restore();
+          // Apply DPR + viewport transform for all rendering
+          ctx.save();
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.translate(vp.offsetX, vp.offsetY);
+          ctx.scale(vp.zoom, vp.zoom);
+        }
+
+        renderResult = renderer.render(
+          cs.chart.lines, bpmList, latestTime, effectiveOffset,
+          rect.width, rect.height, renderOptions,
+        );
+      } else {
+        renderResult = { lines: [] };
+      }
 
       // Store render result for click hit-testing
       lastRenderResultRef.current = renderResult;
@@ -433,13 +521,13 @@ export function UnifiedCanvas() {
         }
 
         // ---- X snap grid (with active lane highlight) ----
-        if (es.xSnapEnabled && es.lanes > 0 && es.selectedLineIndex !== null) {
+        if (es.xSnapEnabled && es.verticalLines > 0 && es.selectedLineIndex !== null) {
           const snapLineInfo = renderResult.lines.find(
             (l) => l.lineIndex === es.selectedLineIndex,
           );
           if (snapLineInfo) {
             drawXSnapGrid(
-              ctx, getXSnapPositions(es.lanes), snapLineInfo, rect.width,
+              ctx, getXSnapPositions(es.verticalLines), snapLineInfo, rect.width,
               es.pendingNote?.x ?? null, // Highlight the lane the ghost note is on
             );
           }
@@ -564,7 +652,7 @@ export function UnifiedCanvas() {
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    const renderer = rendererRef.current;
+    const renderer = rendererRef.current || pixiRendererRef.current;
     if (!canvas || !container || !renderer) return;
 
     const rect = container.getBoundingClientRect();
@@ -613,7 +701,7 @@ export function UnifiedCanvas() {
       const stepResult = tryStepRecordPlace(
         mouseX, mouseY, selectedLineInfo,
         es.stepRecordNoteKind, es.stepRecordCurrentBeat, es.density,
-        es.xSnapEnabled, es.lanes, rect.width,
+        es.xSnapEnabled, es.verticalLines, rect.width,
       );
       if (stepResult) {
         cs.addNote(selectedLineInfo.lineIndex, stepResult.note);
@@ -640,7 +728,7 @@ export function UnifiedCanvas() {
         const placeResult = tryNotePlacement(
           mouseX, mouseY, selectedLineInfo, line,
           es.activeTool, bpmList, rect.width, rect.height,
-          es.beatSyncPlacement, es.density, es.xSnapEnabled, es.lanes,
+          es.beatSyncPlacement, es.density, es.xSnapEnabled, es.verticalLines,
           getCurrentBeat(), getCurrentTime(),
         );
         if (placeResult) {
@@ -927,11 +1015,11 @@ export function UnifiedCanvas() {
       canvas.style.cursor = cursor;
 
       // ---- Step record: hold-to-stream ----
-      if (es.stepRecordActive && es.stepRecordMouseDown && es.xSnapEnabled && es.lanes > 0) {
+      if (es.stepRecordActive && es.stepRecordMouseDown && es.xSnapEnabled && es.verticalLines > 0) {
         const streamResult = handleStepRecordStream(
           mouseX, mouseY, selectedLineInfo,
           es.stepRecordNoteKind, es.stepRecordCurrentBeat, es.density,
-          es.lanes, es.stepRecordLastSnapX, rect.width,
+          es.verticalLines, es.stepRecordLastSnapX, rect.width,
         );
         if (streamResult) {
           useChartStore.getState().addNote(selectedLineInfo.lineIndex, streamResult.note);
@@ -945,7 +1033,7 @@ export function UnifiedCanvas() {
         const ghost = computeStepRecordGhost(
           mouseX, mouseY, selectedLineInfo,
           es.stepRecordNoteKind, es.stepRecordCurrentBeat, es.density,
-          es.xSnapEnabled, es.lanes, rect.width,
+          es.xSnapEnabled, es.verticalLines, rect.width,
         );
         es.setPendingNote(ghost);
         // Don't return — let cursor handling continue, but skip normal ghost
@@ -970,7 +1058,7 @@ export function UnifiedCanvas() {
           const ghost = computePlacementGhost(
             mouseX, mouseY, selectedLineInfo, line,
             es.activeTool, bpmList, rect.width, rect.height,
-            es.beatSyncPlacement, es.density, es.xSnapEnabled, es.lanes,
+            es.beatSyncPlacement, es.density, es.xSnapEnabled, es.verticalLines,
             getCurrentBeat(), getCurrentTime(),
           );
           es.setPendingNote(ghost);
@@ -1209,6 +1297,11 @@ export function UnifiedCanvas() {
           });
         }}
         style={{ cursor: "default" }}
+      />
+      {/* Canvas 2D overlay for handles/selection/overlays when using Pixi renderer */}
+      <canvas
+        ref={overlayCanvasRef}
+        className="absolute inset-0 pointer-events-none"
       />
       {!isLoaded && (
         <div className="absolute inset-0 flex items-center justify-center">

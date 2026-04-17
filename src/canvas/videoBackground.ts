@@ -8,6 +8,14 @@
 //   - Sync to chart playback time
 //   - Scale modes: cropCenter, inside, fit
 //   - Animated alpha and dim overlays
+//
+// Recent change (bug audit #8): Inverted the URL-revocation contract.
+// `unload()` now revokes the object URL it was given, instead of
+// assuming the caller will do it. Before, the code comment said
+// "caller manages the URL lifetime" but no caller did — so every
+// call to `load(newUrl, …)` (which calls `unload()` first to swap
+// videos) leaked the previous blob URL. Callers MUST NOT revoke
+// the URL themselves after passing it to `load()`.
 // ============================================================
 
 import type { VideoBackground } from "../types/extra";
@@ -146,6 +154,12 @@ export class VideoBackgroundManager {
 
   /**
    * Unload the video and free resources.
+   *
+   * Bug audit #8: revokes the blob URL here instead of leaving it to
+   * the caller. Only revoke URLs that look like blob: URLs — direct
+   * file paths passed in as `url` are not object URLs and don't need
+   * (and would error on) revokeObjectURL. Also applies to `load()`
+   * callers that pass http(s) URLs to external videos.
    */
   unload(): void {
     if (this.video) {
@@ -155,7 +169,9 @@ export class VideoBackgroundManager {
       this.video = null;
     }
     if (this.videoUrl) {
-      // Don't revoke — caller manages the URL lifetime
+      if (this.videoUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(this.videoUrl);
+      }
       this.videoUrl = null;
     }
     this.config = null;

@@ -6,7 +6,8 @@
 // ============================================================
 
 import { useCallback, useMemo, useRef, useEffect } from "react";
-import { useContextPanelMode, MODE_TABS } from "../../hooks/useContextPanelMode";
+import { useContextPanelMode, getModeTabs } from "../../hooks/useContextPanelMode";
+import { useSettingsStore } from "../../stores/settingsStore";
 import { useContextPanelStore } from "../../stores/contextPanelStore";
 import { ContextPanelHeader } from "./ContextPanelHeader";
 import { GlobalMode } from "./modes/GlobalMode";
@@ -15,6 +16,7 @@ import { NoteMode } from "./modes/NoteMode";
 import { EventMode } from "./modes/EventMode";
 import { MultiLineMode } from "./modes/MultiLineMode";
 import { MiscToolsTab } from "./MiscToolsTab";
+import { AiTab } from "./modes/AiTab";
 import { StepRecordBanner } from "./StepRecordBanner";
 
 // ---- Props ----
@@ -58,7 +60,12 @@ export function ContextPanel(props: ContextPanelProps) {
   } = props;
 
   const mode = useContextPanelMode();
-  const tabs = MODE_TABS[mode];
+  // Subscribe to aiEnabled — `getModeTabs` reads the setting internally,
+  // but without this subscription the component wouldn't re-render when
+  // the user toggles AI on/off, so the AI tab wouldn't appear/disappear.
+  // The useMemo dep on `aiEnabled` ensures tabs are recomputed on toggle.
+  const aiEnabled = useSettingsStore((s) => s.aiEnabled);
+  const tabs = useMemo(() => getModeTabs(mode), [mode, aiEnabled]);
   const defaultTab = tabs[0]?.id ?? "actions";
 
   const activeTab = useContextPanelStore((s) => s.getActiveTab(mode, defaultTab));
@@ -116,6 +123,8 @@ export function ContextPanel(props: ContextPanelProps) {
   };
 
   const content = useMemo(() => {
+    // AI tab is shared across all modes — renders the same chat interface
+    if (activeTab === "ai") return <AiTab />;
     // Misc tab is shared across all modes
     if (activeTab === "misc") return <MiscToolsTab {...actionProps} />;
 

@@ -239,7 +239,7 @@ export function UnrolledCanvas({
         currentBeat,
         zoom: es.timelineZoom,
         density: es.density,
-        lanes: es.lanes,
+        verticalLines: es.verticalLines,
         noteSideFilter: es.noteSideFilter,
         selectedNoteIndices: es.selectedNoteIndices,
         scrollBeat: getScrollBeat(),
@@ -367,7 +367,7 @@ export function UnrolledCanvas({
     if (tool.startsWith("place_")) {
       const kind = tool.replace("place_", "") as NoteKind;
       const snappedBeat = snapBeat(clickBeat, es.density);
-      const snappedX = es.xSnapEnabled ? snapX(clickNoteX, es.lanes) : Math.round(clickNoteX);
+      const snappedX = es.xSnapEnabled ? snapX(clickNoteX, es.verticalLines) : Math.round(clickNoteX);
       const above = e.shiftKey ? !ss.unrolledDefaultAbove : ss.unrolledDefaultAbove;
 
       // Step record mode: place at step beat instead of click position
@@ -490,7 +490,7 @@ export function UnrolledCanvas({
       const snappedDeltaBeat = Math.round(deltaBeat * es.density) / es.density;
       // Snap delta X to lane grid if enabled
       const snappedDeltaX = es.xSnapEnabled
-        ? snapX(drag.originalNotes[0].x + deltaX, es.lanes) - drag.originalNotes[0].x
+        ? snapX(drag.originalNotes[0].x + deltaX, es.verticalLines) - drag.originalNotes[0].x
         : Math.round(deltaX);
 
       cs.batchEditNotes(lineIdx!, drag.noteIndices.map((idx, i) => ({
@@ -535,7 +535,7 @@ export function UnrolledCanvas({
       const clickBeat = UnrolledRenderer.yToBeat(y, scrollBeat, es.timelineZoom, h);
       const clickNoteX = UnrolledRenderer.pixelToNoteX(x, noteAreaLeft, noteAreaWidth);
       const snappedBeat = snapBeat(clickBeat, es.density);
-      const snappedX = es.xSnapEnabled ? snapX(clickNoteX, es.lanes) : Math.round(clickNoteX);
+      const snappedX = es.xSnapEnabled ? snapX(clickNoteX, es.verticalLines) : Math.round(clickNoteX);
       const above = e.shiftKey ? !ss.unrolledDefaultAbove : ss.unrolledDefaultAbove;
 
       es.setPendingNote({

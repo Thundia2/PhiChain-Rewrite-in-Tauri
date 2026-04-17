@@ -21,8 +21,7 @@ export type DialogId =
   | "selective-export"
   | "record-review"
   | "settings"
-  | "command-palette"
-  | "onset-calibration";
+  | "command-palette";
 
 interface DialogStore {
   /** Set of currently open dialog IDs */

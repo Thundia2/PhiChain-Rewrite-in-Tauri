@@ -263,8 +263,8 @@ input, textarea, [contenteditable="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
-  height: 28px;
+  padding: 0 14px;
+  height: 34px;
   font-size: 12px;
   cursor: pointer;
   border: none;
@@ -273,7 +273,7 @@ input, textarea, [contenteditable="true"] {
   transition: background-color 0.15s, color 0.15s;
   border-top: 2px solid transparent;
   white-space: nowrap;
-  max-width: 180px;
+  max-width: 260px;
   border-radius: 6px 6px 0 0;
 }
 
@@ -308,4 +308,22 @@ input, textarea, [contenteditable="true"] {
 .tab-close:hover {
   background-color: rgba(255, 70, 70, 0.3);
   color: #ff6b6b;
+}
+
+/* View-type badge shown inside editor tabs (e.g. "Unified", "Unrolled") */
+.tab-type-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(108, 138, 255, 0.12);
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+
+/* Inline rename input inside a tab button */
+.tab-button input {
+  flex: 1;
+  min-width: 0;
 }

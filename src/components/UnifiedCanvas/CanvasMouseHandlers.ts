@@ -195,7 +195,7 @@ export function tryStepRecordPlace(
   currentStepBeat: number,
   density: number,
   xSnapEnabled: boolean,
-  lanes: number,
+  verticalLines: number,
   canvasWidth: number,
 ): StepRecordPlaceResult | null {
   const local = screenToLineLocal(
@@ -204,10 +204,10 @@ export function tryStepRecordPlace(
     lineInfo.rotation, canvasWidth,
   );
 
-  // X position with snap (reuses lanes for divisions)
+  // X position with snap (verticalLines = line count, not division count)
   const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
-  const x = xSnapEnabled && lanes > 0
-    ? snapX(rawX, lanes)
+  const x = xSnapEnabled && verticalLines >= 2
+    ? snapX(rawX, verticalLines)
     : Math.round(rawX);
 
   // Beat from the step counter (not mouse position or playhead)
@@ -261,7 +261,7 @@ export function tryNotePlacement(
   beatSyncPlacement: boolean,
   density: number,
   xSnapEnabled: boolean,
-  lanes: number,
+  verticalLines: number,
   currentBeat: number,
   currentTime: number,
 ): NotePlacementAction | null {
@@ -279,8 +279,8 @@ export function tryNotePlacement(
     );
     const beat = snapBeat(currentBeat, density);
     const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
-    const x = xSnapEnabled && lanes > 0
-      ? snapX(rawX, lanes)
+    const x = xSnapEnabled && verticalLines >= 2
+      ? snapX(rawX, verticalLines)
       : Math.round(rawX);
     placement = { beat, x, above: local.above };
   } else {
@@ -294,7 +294,7 @@ export function tryNotePlacement(
       bpmList,
       canvasWidth, canvasHeight,
       density,
-      xSnapEnabled ? lanes : 0,
+      xSnapEnabled ? verticalLines : 0,
     );
   }
 
@@ -604,7 +604,7 @@ export function handleStepRecordStream(
   noteKind: NoteKind,
   currentStepBeat: number,
   density: number,
-  lanes: number,
+  verticalLines: number,
   lastSnapX: number | null,
   canvasWidth: number,
 ): StepRecordPlaceResult | null {
@@ -614,7 +614,7 @@ export function handleStepRecordStream(
     lineInfo.rotation, canvasWidth,
   );
   const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
-  const snappedX = snapX(rawX, lanes);
+  const snappedX = snapX(rawX, verticalLines);
 
   // Only place a note if we crossed to a NEW snap position
   if (lastSnapX === null || snappedX === lastSnapX) {
@@ -648,7 +648,7 @@ export function computeStepRecordGhost(
   currentStepBeat: number,
   density: number,
   xSnapEnabled: boolean,
-  lanes: number,
+  verticalLines: number,
   canvasWidth: number,
 ): PendingNote {
   const local = screenToLineLocal(
@@ -657,8 +657,8 @@ export function computeStepRecordGhost(
     lineInfo.rotation, canvasWidth,
   );
   const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
-  const x = xSnapEnabled && lanes > 0
-    ? snapX(rawX, lanes)
+  const x = xSnapEnabled && verticalLines >= 2
+    ? snapX(rawX, verticalLines)
     : Math.round(rawX);
   const beat = snapBeat(currentStepBeat, density);
 
@@ -719,7 +719,7 @@ export function computePlacementGhost(
   beatSyncPlacement: boolean,
   density: number,
   xSnapEnabled: boolean,
-  lanes: number,
+  verticalLines: number,
   currentBeat: number,
   currentTime: number,
 ): PendingNote | null {
@@ -735,8 +735,8 @@ export function computePlacementGhost(
     );
     const beat = snapBeat(currentBeat, density);
     const rawX = Math.max(-CANVAS_WIDTH / 2, Math.min(CANVAS_WIDTH / 2, local.noteX));
-    const x = xSnapEnabled && lanes > 0
-      ? snapX(rawX, lanes)
+    const x = xSnapEnabled && verticalLines >= 2
+      ? snapX(rawX, verticalLines)
       : Math.round(rawX);
     return { beat, x, kind: noteKind, above: local.above };
   } else {
@@ -751,7 +751,7 @@ export function computePlacementGhost(
       canvasWidth, canvasHeight,
       density,
       noteKind,
-      xSnapEnabled ? lanes : 0,
+      xSnapEnabled ? verticalLines : 0,
     );
     if (!ghostResult) return null;
     return {
