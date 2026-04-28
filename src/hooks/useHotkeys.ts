@@ -32,6 +32,7 @@ export function useGlobalHotkeys(callbacks: {
   onImportChart?: () => void;
   onShowGoToBeat?: () => void;
   onShowPasteSpecial?: () => void;
+  onShowOnsetCalibration?: () => void;
 }) {
   // ---- Tool shortcuts ----
   const setTool = (tool: EditorTool) => () => useEditorStore.getState().setTool(tool);
@@ -39,27 +40,34 @@ export function useGlobalHotkeys(callbacks: {
   useHotkeys("v", setTool("select"), { preventDefault: true });
   useHotkeys("x", setTool("eraser"), { preventDefault: true });
 
-  // Q/W/E/R: place markers in mark mode, switch note kind in step record, switch tools otherwise
-  useHotkeys("q", () => {
+  // Q/W/E/R: CapsLock = event tool; else mark / step record / note tool.
+  // CapsLock takes priority — see plan tingly-napping-crayon.md §4.
+  // event.getModifierState("CapsLock") reads the OS state and works
+  // in Tauri's webview the same as in the browser.
+  useHotkeys("q", (event) => {
     const es = useEditorStore.getState();
+    if (event.getModifierState("CapsLock")) { es.setTool("place_event_x"); return; }
     if (es.improvisationMode) { improvPlace("tap"); return; }
     if (es.stepRecordActive) { es.setStepRecordNoteKind("tap"); return; }
     es.setTool("place_tap");
   }, { preventDefault: true });
-  useHotkeys("w", () => {
+  useHotkeys("w", (event) => {
     const es = useEditorStore.getState();
+    if (event.getModifierState("CapsLock")) { es.setTool("place_event_y"); return; }
     if (es.improvisationMode) { improvPlace("drag"); return; }
     if (es.stepRecordActive) { es.setStepRecordNoteKind("drag"); return; }
     es.setTool("place_drag");
   }, { preventDefault: true });
-  useHotkeys("e", () => {
+  useHotkeys("e", (event) => {
     const es = useEditorStore.getState();
+    if (event.getModifierState("CapsLock")) { es.setTool("place_event_rotation"); return; }
     if (es.improvisationMode) { improvPlace("flick"); return; }
     if (es.stepRecordActive) { es.setStepRecordNoteKind("flick"); return; }
     es.setTool("place_flick");
   }, { preventDefault: true });
-  useHotkeys("r", () => {
+  useHotkeys("r", (event) => {
     const es = useEditorStore.getState();
+    if (event.getModifierState("CapsLock")) { es.setTool("place_event_opacity"); return; }
     if (es.improvisationMode) { improvPlace("hold"); return; }
     if (es.stepRecordActive) { es.setStepRecordNoteKind("hold"); return; }
     es.setTool("place_hold");
@@ -67,7 +75,12 @@ export function useGlobalHotkeys(callbacks: {
 
   // ---- Unified Editor panels ----
   useHotkeys("l", () => useEditorStore.getState().toggleLineDrawer(), { preventDefault: true });
-  useHotkeys("i", () => useEditorStore.getState().toggleUnifiedInspector(), { preventDefault: true });
+  // I: CapsLock = Color event tool; else toggle Unified Inspector
+  useHotkeys("i", (event) => {
+    const es = useEditorStore.getState();
+    if (event.getModifierState("CapsLock")) { es.setTool("place_event_color"); return; }
+    es.toggleUnifiedInspector();
+  }, { preventDefault: true });
   useHotkeys("k", () => useEditorStore.getState().toggleKeyframeBar(), { preventDefault: true });
   useHotkeys("shift+k", () => useEditorStore.getState().toggleCurveEditorExpanded(), { preventDefault: true });
   useHotkeys("ctrl+shift+k, meta+shift+k", () => {
@@ -371,6 +384,11 @@ export function useGlobalHotkeys(callbacks: {
     callbacks.onShowGoToBeat?.();
   }, { preventDefault: true });
 
+  // ---- Onset Calibration dialog (Phase C of onset plan, 2026-04-20) ----
+  useHotkeys("ctrl+shift+o, meta+shift+o", () => {
+    callbacks.onShowOnsetCalibration?.();
+  }, { preventDefault: true });
+
   // ---- Paste Special dialog ----
   useHotkeys("ctrl+alt+v, meta+alt+v", () => {
     callbacks.onShowPasteSpecial?.();
@@ -479,9 +497,29 @@ export function useGlobalHotkeys(callbacks: {
   }, { preventDefault: true });
 
   // ---- Beat Sync placement toggle ----
-  useHotkeys("t", () => {
-    useEditorStore.getState().toggleBeatSyncPlacement();
+  // T: CapsLock = Speed event tool; else toggle Beat Sync placement.
+  useHotkeys("t", (event) => {
+    const es = useEditorStore.getState();
+    if (event.getModifierState("CapsLock")) { es.setTool("place_event_speed"); return; }
+    es.toggleBeatSyncPlacement();
   }, { preventDefault: true, enableOnFormTags: false });
+
+  // ---- Y / U / O — CapsLock-only event hotkeys ----
+  // These keys aren't bound otherwise, but per the user's spec they
+  // STILL require CapsLock so the event-mode dimension remains
+  // consistent across the QWERTY top row. No-op without CapsLock.
+  useHotkeys("y", (event) => {
+    if (!event.getModifierState("CapsLock")) return;
+    useEditorStore.getState().setTool("place_event_scale_x");
+  }, { preventDefault: true });
+  useHotkeys("u", (event) => {
+    if (!event.getModifierState("CapsLock")) return;
+    useEditorStore.getState().setTool("place_event_scale_y");
+  }, { preventDefault: true });
+  useHotkeys("o", (event) => {
+    if (!event.getModifierState("CapsLock")) return;
+    useEditorStore.getState().setTool("place_event_text");
+  }, { preventDefault: true });
 
   // ---- Step Record toggle ----
   useHotkeys("s", () => {

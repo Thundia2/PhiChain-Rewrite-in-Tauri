@@ -259,9 +259,24 @@ export interface OnsetResult {
   probability: number;
 }
 
-/** Run ML onset detection on an audio file. musicPath must be absolute. */
-export async function detectOnsetsMl(musicPath: string): Promise<OnsetResult[]> {
-  return invoke<OnsetResult[]>("detect_onsets_ml", { musicPath });
+/** Versioned envelope returned by `detect_onsets_ml` (Phase B of onset plan,
+ *  2026-04-20). The `version` field lets the frontend detect shape skew on
+ *  upgrades and bust its salience cache rather than reading garbage. Must
+ *  match `ONSET_PIPELINE_VERSION` in src-tauri/src/onset_ml.rs. */
+export interface OnsetBundle {
+  version: number;
+  frames: OnsetResult[];
+}
+
+/** The frontend's compiled-in expectation of the Rust pipeline version.
+ *  Bump this alongside `ONSET_PIPELINE_VERSION` on the Rust side; mismatch
+ *  surfaces a dev-mode warning + clears the cached results. */
+export const EXPECTED_ONSET_PIPELINE_VERSION = 2;
+
+/** Run ML onset detection on an audio file. musicPath must be absolute.
+ *  Returns the whole song's per-frame salience plus a version stamp. */
+export async function detectOnsetsMl(musicPath: string): Promise<OnsetBundle> {
+  return invoke<OnsetBundle>("detect_onsets_ml", { musicPath });
 }
 
 /**

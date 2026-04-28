@@ -73,6 +73,7 @@ export function useMenus(
   onShowSpinGenerator?: () => void,
   onShowShakeGenerator?: () => void,
   onShowNotePattern?: () => void,
+  onShowOnsetCalibration?: () => void,
 ): Menu[] {
   const projectPath = useChartStore((s) => s.projectPath);
   const getChartJson = useChartStore((s) => s.getChartJson);
@@ -253,6 +254,12 @@ export function useMenus(
           shortcut: "Ctrl+J",
           disabled: !isLoaded,
           action: () => onShowGoToBeat?.(),
+        },
+        {
+          label: "Onset Calibration...",
+          shortcut: "Ctrl+Shift+O",
+          disabled: !isLoaded,
+          action: () => onShowOnsetCalibration?.(),
         },
         { separator: true, label: "" },
         {

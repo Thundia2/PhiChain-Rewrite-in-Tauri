@@ -30,6 +30,20 @@ export interface PendingNote {
   above: boolean;
 }
 
+/**
+ * Tri-state visibility toggle for unrolled-editor layers.
+ *  - "all":   render normally and allow editing/hit-testing
+ *  - "ghost": render dim (globalAlpha = 0.3 in the renderer) and skip
+ *             all hit-tests so the user can use the layer as visual
+ *             reference without misclicking onto it
+ *  - "none":  do not render and do not hit-test
+ *
+ * The dimming is applied via canvas globalAlpha, intentionally separate
+ * from `Note.alpha` (which is the gameplay tint, 0-255). Editor display
+ * never reads `note.alpha` — see canvas/unrolledRenderer.ts drawNote.
+ */
+export type LayerVisibility = "all" | "ghost" | "none";
+
 export interface EditorState {
   // ---- Selection ----
   selectedLineIndex: number | null;
@@ -135,6 +149,10 @@ export interface EditorState {
   // ---- Unrolled Canvas state ----
   unrolledScrollBeat: number;          // Beat at the bottom of the viewport (default 0)
   showMiniPreview: boolean;            // Show the mini game preview inset (default true)
+  /** Note layer visibility in the unrolled canvas (default "all"). See LayerVisibility. */
+  unrolledNoteVisibility: LayerVisibility;
+  /** Event layer visibility in the unrolled canvas (default "all"). See LayerVisibility. */
+  unrolledEventVisibility: LayerVisibility;
 
   // ---- Per-line unrolled editor tab state ----
   lineTabScrollBeats: Record<number, number>;     // lineIndex -> scrollBeat for per-line tabs
@@ -314,6 +332,8 @@ export interface EditorState {
   // ---- Unrolled Canvas actions ----
   setUnrolledScrollBeat: (beat: number) => void;
   toggleMiniPreview: () => void;
+  setUnrolledNoteVisibility: (v: LayerVisibility) => void;
+  setUnrolledEventVisibility: (v: LayerVisibility) => void;
 
   // ---- Per-line unrolled tab actions ----
   setLineTabScrollBeat: (lineIndex: number, beat: number) => void;
@@ -459,6 +479,8 @@ export const useEditorStore = create<EditorState>()((set) => ({
   // ---- Unrolled Canvas ----
   unrolledScrollBeat: 0,
   showMiniPreview: true,
+  unrolledNoteVisibility: "all",
+  unrolledEventVisibility: "all",
 
   // ---- Per-line unrolled tab ----
   lineTabScrollBeats: {},
@@ -747,6 +769,8 @@ export const useEditorStore = create<EditorState>()((set) => ({
   // ---- Unrolled Canvas ----
   setUnrolledScrollBeat: (beat) => set({ unrolledScrollBeat: Math.max(0, beat) }),
   toggleMiniPreview: () => set((s) => ({ showMiniPreview: !s.showMiniPreview })),
+  setUnrolledNoteVisibility: (v) => set({ unrolledNoteVisibility: v }),
+  setUnrolledEventVisibility: (v) => set({ unrolledEventVisibility: v }),
 
   // ---- Per-line unrolled tab ----
   setLineTabScrollBeat: (lineIndex, beat) => set((s) => ({

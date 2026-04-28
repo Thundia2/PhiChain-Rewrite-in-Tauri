@@ -1,0 +1,46 @@
+{
+  "generated_by": "scripts/convert_ddc_to_onnx.py",
+  "difficulty_baked_in": "CHALLENGE",
+  "files": {
+    "placement_onnx": {
+      "name": "ddc_onset_placement.onnx",
+      "size_bytes": 1325710,
+      "input": "spectrogram: float32[num_frames, 80, 3] (dynamic num_frames)",
+      "output": "onset_probability: float32[num_frames]"
+    },
+    "extractor_bin": {
+      "name": "ddc_onset_extractor.bin",
+      "size_bytes": 1176512,
+      "layout": [
+        "window_1024: float32[1024]",
+        "window_2048: float32[2048]",
+        "window_4096: float32[4096]",
+        "mel_1024: float32[513 x 80] (row-major)",
+        "mel_2048: float32[1025 x 80] (row-major)",
+        "mel_4096: float32[2049 x 80] (row-major)"
+      ],
+      "fft_sizes_in_channel_order": [
+        1024,
+        2048,
+        4096
+      ],
+      "num_mel_bands": 80
+    },
+    "normalizer_bin": {
+      "name": "ddc_onset_normalizer.bin",
+      "size_bytes": 1920,
+      "layout": [
+        "mean: float32[80 x 3] (row-major)",
+        "std: float32[80 x 3] (row-major)"
+      ]
+    }
+  },
+  "pipeline_constants": {
+    "sample_rate": 44100,
+    "frame_rate": 100,
+    "hop_size": 441,
+    "log_eps": 1e-16,
+    "context_radius_frames": 7,
+    "conv_context_radius_frames": 3
+  }
+}

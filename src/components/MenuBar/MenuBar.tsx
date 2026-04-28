@@ -30,6 +30,7 @@ export function MenuBar({
   onShowSpinGenerator,
   onShowShakeGenerator,
   onShowNotePattern,
+  onShowOnsetCalibration,
 }: {
   onTogglePanel?: (id: PanelId) => void;
   onResetLayout?: () => void;
@@ -47,8 +48,9 @@ export function MenuBar({
   onShowSpinGenerator?: () => void;
   onShowShakeGenerator?: () => void;
   onShowNotePattern?: () => void;
+  onShowOnsetCalibration?: () => void;
 }) {
-  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel, onShowPasteSpecial, onShowGoToBeat, onShowExportDiff, onShowSelectiveExport, onShowSpinGenerator, onShowShakeGenerator, onShowNotePattern);
+  const MENUS = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel, onShowPasteSpecial, onShowGoToBeat, onShowExportDiff, onShowSelectiveExport, onShowSpinGenerator, onShowShakeGenerator, onShowNotePattern, onShowOnsetCalibration);
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 

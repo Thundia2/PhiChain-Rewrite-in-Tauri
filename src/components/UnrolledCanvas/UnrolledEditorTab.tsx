@@ -21,6 +21,7 @@ import { useCallback, useRef, useEffect } from "react";
 import { Toolbar } from "../Toolbar/Toolbar";
 import { UnrolledCanvas } from "./UnrolledCanvas";
 import { MiniGamePreview } from "./MiniGamePreview";
+import { UnrolledViewBar } from "./UnrolledViewBar";
 import { UnifiedInspector } from "../UnifiedCanvas/UnifiedInspector";
 import { TransportBar } from "../TransportBar/TransportBar";
 import { KeyframeBar } from "../KeyframeBar/KeyframeBar";
@@ -174,6 +175,9 @@ export function UnrolledEditorTab({ lineIndex }: UnrolledEditorTabProps = {}) {
           ) : (
             <LineStrip />
           )}
+
+          {/* Visibility toggles bar — controls notes/events render + interactivity in the canvas below */}
+          <UnrolledViewBar />
 
           {/* Canvas area with MiniGamePreview overlay + Group edit overlay */}
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>

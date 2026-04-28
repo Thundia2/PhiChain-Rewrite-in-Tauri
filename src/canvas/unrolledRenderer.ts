@@ -6,22 +6,29 @@
 // This eliminates the non-linear distance computation of the
 // game renderer, making note placement intuitive and precise.
 //
-// Recent change (bug audit #3 + #14):
-//   1. drawBeatGrid: replaced floating-point accumulation
-//      `for (let b = startBeat; b <= maxBeat + step; b += step)`
-//      with integer-indexed iteration `for (let i = ...; i++)` so
-//      grid lines don't drift out of alignment with note snap
-//      positions as scrollBeat grows. TimelineRenderer already had
-//      this fix; unrolled was missed in the dd7871d audit.
-//   2. Wrapped the pending-note `setLineDash([4,4])` block in
-//      try/finally so an exception can't leave the dash pattern
-//      set for subsequent draws that frame.
+// Recent change: per-line events are now rendered alongside notes,
+// using EVENT_COLORS for kind-based color coding. Three layers:
+//   - Span tint (faint wash from start_beat → end_beat)        [opt-in via settings]
+//   - Boundary lines (solid at start, dashed at end)
+//   - Gutter diamonds with single-letter kind labels
+// Notes and events both honor independent tri-state visibility
+// (all / ghost / none) — see LayerVisibility in editorStore.
+//
+// The below-note ▼ glyph was removed; above/below differentiation
+// continues via the ABOVE_NOTE_COLORS vs BELOW_NOTE_COLORS palette
+// split (see constants/canvasConstants.ts).
+//
+// Bug audit references kept from earlier passes:
+//   #3:  drawBeatGrid uses integer-indexed iteration (vs ulp-drifting
+//        float accumulation) so grid lines stay snap-aligned.
+//   #14: pending-note setLineDash wrapped in try/finally so an
+//        exception can't leak the dash pattern into later draws.
 // ============================================================
 
-import type { Note, CurveNoteTrack } from "../types/chart";
+import type { Note, CurveNoteTrack, LineEvent, LineEventKind } from "../types/chart";
 import { CANVAS_WIDTH, beatToFloat } from "../types/chart";
 import { generateCurveNotes } from "../utils/curveNoteTrack";
-import type { DragSelectionRect, PendingNote } from "../stores/editorStore";
+import type { DragSelectionRect, PendingNote, LayerVisibility } from "../stores/editorStore";
 import {
   BEAT_GUTTER_WIDTH,
   BASE_PX_PER_BEAT,
@@ -30,6 +37,7 @@ import {
   ABOVE_NOTE_COLORS,
   BELOW_NOTE_COLORS,
 } from "../constants/canvasConstants";
+import { EVENT_COLORS } from "../constants/eventColors";
 
 // ============================================================
 // Renderer-specific sizing (only the unrolled view uses these)
@@ -46,6 +54,46 @@ const HOLD_WIDTH = 18;
 
 /** Drag handle size (small square on selected notes) */
 const DRAG_HANDLE_SIZE = 5;
+
+/**
+ * Extra width added to the beat gutter when events are visible, to
+ * fit per-event diamond markers. The base BEAT_GUTTER_WIDTH (36 px)
+ * is shared with TimelineRenderer and intentionally untouched in
+ * canvasConstants.ts; this extension is unrolled-only.
+ */
+export const EVENT_GUTTER_EXTRA = 22;
+
+/** Half-size of the event diamond marker rendered in the gutter. */
+const EVENT_DIAMOND_HALF = 4;
+
+/** Hit-test slop around an event diamond, in px. */
+export const EVENT_DIAMOND_HIT_RADIUS = 6;
+
+/** Globalalpha multiplier applied to a layer when its visibility === "ghost". */
+const GHOST_ALPHA = 0.3;
+
+/**
+ * Single-letter kind tag drawn next to the gutter diamond. Mirrors
+ * KIND_SHORT in constants/eventConfig.ts but kept local so unrolledRenderer
+ * doesn't pull in that file's React-flavored constants.
+ */
+const EVENT_KIND_LETTER: Record<LineEventKind, string> = {
+  x: "X", y: "Y", rotation: "R", opacity: "O", speed: "S",
+  scale_x: "x", scale_y: "y", color: "C", text: "T", incline: "I", gif: "G",
+};
+
+/**
+ * Compute the effective beat-gutter width for the unrolled view given
+ * the current event visibility. When events are hidden, the gutter
+ * collapses back to the shared base width so no horizontal space is
+ * wasted; when events are visible (all or ghost), it expands to hold
+ * the per-event diamonds.
+ */
+export function effectiveGutterWidth(eventVisibility: LayerVisibility): number {
+  return eventVisibility === "none"
+    ? BEAT_GUTTER_WIDTH
+    : BEAT_GUTTER_WIDTH + EVENT_GUTTER_EXTRA;
+}
 
 // ============================================================
 // Overlay note rendering (ghost notes from other lines)
@@ -81,6 +129,17 @@ export interface UnrolledRenderParams {
   onsetMarkers?: { beat: number; strength: number }[] | null;
   /** Opacity multiplier for onset markers (from settings) */
   onsetOpacity?: number;
+  // ---- Events ----
+  /** Per-line events for the active line. Pass [] to suppress event drawing. */
+  events?: LineEvent[];
+  /** Indices into `events` that are currently selected; gets a white outline. */
+  selectedEventIndices?: number[];
+  /** Visibility for the notes layer. Default "all". */
+  noteVisibility?: LayerVisibility;
+  /** Visibility for the events layer. Default "all". */
+  eventVisibility?: LayerVisibility;
+  /** Whether to draw the faint full-width tint between event start and end. */
+  showEventSpanTints?: boolean;
 }
 
 // ============================================================
@@ -96,9 +155,20 @@ export class UnrolledRenderer {
 
   // ---- Static coordinate conversion methods ----
 
-  /** Get the note area dimensions given a canvas width */
-  static getNoteAreaBounds(canvasWidth: number) {
-    const noteAreaLeft = BEAT_GUTTER_WIDTH;
+  /**
+   * Get the note area dimensions given a canvas width.
+   *
+   * The optional `gutterWidth` lets the unrolled view widen the beat
+   * gutter to hold per-event diamonds (see effectiveGutterWidth above).
+   * Defaults to BEAT_GUTTER_WIDTH so callers that don't care about
+   * events still get the historical layout.
+   *
+   * NOTE: callers in UnrolledCanvas.tsx that hit-test mouse coords
+   * MUST pass the same gutterWidth used at render time, otherwise
+   * note hit-tests will skew by EVENT_GUTTER_EXTRA pixels.
+   */
+  static getNoteAreaBounds(canvasWidth: number, gutterWidth: number = BEAT_GUTTER_WIDTH) {
+    const noteAreaLeft = gutterWidth;
     const noteAreaRight = canvasWidth;
     const noteAreaWidth = Math.max(noteAreaRight - noteAreaLeft, 1);
     return { noteAreaLeft, noteAreaRight, noteAreaWidth };
@@ -155,8 +225,11 @@ export class UnrolledRenderer {
     } = params;
     const ctx = this.ctx;
     const pxPerBeat = BASE_PX_PER_BEAT * zoom;
+    const noteVisibility: LayerVisibility = params.noteVisibility ?? "all";
+    const eventVisibility: LayerVisibility = params.eventVisibility ?? "all";
+    const gutterWidth = effectiveGutterWidth(eventVisibility);
     const { noteAreaLeft, noteAreaWidth } =
-      UnrolledRenderer.getNoteAreaBounds(canvasWidth);
+      UnrolledRenderer.getNoteAreaBounds(canvasWidth, gutterWidth);
 
     // ---- Clear with dark background ----
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -168,7 +241,7 @@ export class UnrolledRenderer {
     const maxBeat = scrollBeat + canvasHeight / pxPerBeat;
 
     // ---- Beat grid ----
-    this.drawBeatGrid(ctx, minBeat, maxBeat, density, pxPerBeat, scrollBeat, canvasWidth, canvasHeight);
+    this.drawBeatGrid(ctx, minBeat, maxBeat, density, pxPerBeat, scrollBeat, canvasWidth, canvasHeight, gutterWidth);
 
     // ---- Lane guides ----
     this.drawLaneGuides(ctx, verticalLines, noteAreaLeft, noteAreaWidth, canvasHeight);
@@ -177,7 +250,7 @@ export class UnrolledRenderer {
     this.drawRegionLabels(ctx, noteAreaLeft, noteAreaWidth, canvasHeight);
 
     // ---- Judgment line visual (faint horizontal bar at beat 0 if visible) ----
-    this.drawJudgmentLine(ctx, scrollBeat, zoom, canvasWidth, canvasHeight);
+    this.drawJudgmentLine(ctx, scrollBeat, zoom, canvasWidth, canvasHeight, gutterWidth);
 
     // ---- Onset markers (behind notes, after grid) ----
     if (params.onsetMarkers && params.onsetMarkers.length > 0) {
@@ -186,43 +259,70 @@ export class UnrolledRenderer {
         minBeat, maxBeat, scrollBeat, zoom,
         canvasWidth, canvasHeight,
         params.onsetOpacity ?? 0.6,
+        gutterWidth,
       );
     }
 
-    // ---- Notes ----
-    const selectedSet = new Set(selectedNoteIndices);
-
-    for (let idx = 0; idx < notes.length; idx++) {
-      const note = notes[idx];
-      if (noteSideFilter === "above" && !note.above) continue;
-      if (noteSideFilter === "below" && note.above) continue;
-
-      const beat = beatToFloat(note.beat);
-      if (beat < minBeat - 2 || beat > maxBeat + 2) continue;
-      const isSelected = selectedSet.has(idx);
-      this.drawNote(ctx, note, beat, isSelected, scrollBeat, zoom, noteAreaLeft, noteAreaWidth, canvasHeight);
+    // ---- Events: span tints + boundaries (drawn behind notes) ----
+    // Wrapped in a visibility wrapper that no-ops on "none" and sets
+    // globalAlpha = 0.3 on "ghost". The wrapper save/restores so we
+    // never leak globalAlpha into subsequent passes.
+    const events = params.events ?? [];
+    const showSpanTints = params.showEventSpanTints ?? true;
+    if (events.length > 0) {
+      this.withVisibility(eventVisibility, () => {
+        this.drawEventSpansAndBoundaries(
+          ctx, events, minBeat, maxBeat,
+          scrollBeat, zoom,
+          noteAreaLeft, noteAreaWidth, canvasHeight,
+          showSpanTints,
+        );
+      });
     }
 
-    // ---- Curve note track generated notes (semi-transparent) ----
-    if (params.curveNoteTracks) {
-      for (const track of params.curveNoteTracks) {
-        if (track.from == null || track.to == null) continue;
-        const fromIdx = typeof track.from === "number" ? track.from : parseInt(track.from as string);
-        const toIdx = typeof track.to === "number" ? track.to : parseInt(track.to as string);
-        const fromNote = notes[fromIdx];
-        const toNote = notes[toIdx];
-        if (!fromNote || !toNote) continue;
+    // ---- Notes ----
+    // Wrapped in a visibility wrapper. When "ghost" the entire notes
+    // pass (heads, holds, selection rings, drag handles) gets dimmed
+    // uniformly via globalAlpha — separate from per-note `alpha` field.
+    this.withVisibility(noteVisibility, () => {
+      const selectedSet = new Set(selectedNoteIndices);
+      for (let idx = 0; idx < notes.length; idx++) {
+        const note = notes[idx];
+        if (noteSideFilter === "above" && !note.above) continue;
+        if (noteSideFilter === "below" && note.above) continue;
 
-        const curveNotes = generateCurveNotes(fromNote, toNote, track);
-        for (const cn of curveNotes) {
-          const cnBeat = beatToFloat(cn.beat);
-          if (cnBeat < minBeat - 2 || cnBeat > maxBeat + 2) continue;
-          ctx.globalAlpha = 0.25;
-          this.drawNote(ctx, cn, cnBeat, false, scrollBeat, zoom, noteAreaLeft, noteAreaWidth, canvasHeight);
-          ctx.globalAlpha = 1;
+        const beat = beatToFloat(note.beat);
+        if (beat < minBeat - 2 || beat > maxBeat + 2) continue;
+        const isSelected = selectedSet.has(idx);
+        this.drawNote(ctx, note, beat, isSelected, scrollBeat, zoom, noteAreaLeft, noteAreaWidth, canvasHeight);
+      }
+
+      // Curve note track generated notes (semi-transparent).
+      // Kept inside the notes-visibility wrapper so they hide/ghost
+      // with notes. The 0.25 multiplier is composed against the
+      // wrapper's globalAlpha (e.g. 0.3 in ghost mode) instead of
+      // overwriting it absolutely.
+      if (params.curveNoteTracks) {
+        const baseAlpha = ctx.globalAlpha;
+        for (const track of params.curveNoteTracks) {
+          if (track.from == null || track.to == null) continue;
+          const fromIdx = typeof track.from === "number" ? track.from : parseInt(track.from as string);
+          const toIdx = typeof track.to === "number" ? track.to : parseInt(track.to as string);
+          const fromNote = notes[fromIdx];
+          const toNote = notes[toIdx];
+          if (!fromNote || !toNote) continue;
+
+          const curveNotes = generateCurveNotes(fromNote, toNote, track);
+          for (const cn of curveNotes) {
+            const cnBeat = beatToFloat(cn.beat);
+            if (cnBeat < minBeat - 2 || cnBeat > maxBeat + 2) continue;
+            ctx.globalAlpha = baseAlpha * 0.25;
+            this.drawNote(ctx, cn, cnBeat, false, scrollBeat, zoom, noteAreaLeft, noteAreaWidth, canvasHeight);
+            ctx.globalAlpha = baseAlpha;
+          }
         }
       }
-    }
+    });
 
     // ---- Overlay notes from other lines (dashed outlines) ----
     if (params.overlayLines && params.overlayLines.length > 0) {
@@ -321,31 +421,75 @@ export class UnrolledRenderer {
     }
 
     // ---- Playhead indicator (current beat) ----
+    // Anchored at the right edge of the *full* gutter (after any
+    // event-marker extension) so it doesn't bleed into the diamonds.
     const indicatorY = UnrolledRenderer.beatToY(currentBeat, scrollBeat, zoom, canvasHeight);
     if (indicatorY >= -10 && indicatorY <= canvasHeight + 10) {
       ctx.strokeStyle = PLAYHEAD_COLOR;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(BEAT_GUTTER_WIDTH, indicatorY);
+      ctx.moveTo(gutterWidth, indicatorY);
       ctx.lineTo(canvasWidth, indicatorY);
       ctx.stroke();
 
       // Small triangle indicator on the gutter edge
       ctx.fillStyle = PLAYHEAD_COLOR;
       ctx.beginPath();
-      ctx.moveTo(BEAT_GUTTER_WIDTH, indicatorY - 5);
-      ctx.lineTo(BEAT_GUTTER_WIDTH + 8, indicatorY);
-      ctx.lineTo(BEAT_GUTTER_WIDTH, indicatorY + 5);
+      ctx.moveTo(gutterWidth, indicatorY - 5);
+      ctx.lineTo(gutterWidth + 8, indicatorY);
+      ctx.lineTo(gutterWidth, indicatorY + 5);
       ctx.fill();
     }
 
-    // ---- Separator line: beat gutter right edge ----
+    // ---- Separator lines ----
+    // Inner: between beat numbers and the (possibly empty) event column.
+    // Outer: between the gutter and the note area.
     ctx.strokeStyle = "rgba(255,255,255,0.15)";
     ctx.lineWidth = 1;
+    if (eventVisibility !== "none") {
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.beginPath();
+      ctx.moveTo(BEAT_GUTTER_WIDTH, 0);
+      ctx.lineTo(BEAT_GUTTER_WIDTH, canvasHeight);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    }
     ctx.beginPath();
-    ctx.moveTo(BEAT_GUTTER_WIDTH, 0);
-    ctx.lineTo(BEAT_GUTTER_WIDTH, canvasHeight);
+    ctx.moveTo(gutterWidth, 0);
+    ctx.lineTo(gutterWidth, canvasHeight);
     ctx.stroke();
+
+    // ---- Event gutter diamonds (drawn last, on top of separators) ----
+    if (events.length > 0 && eventVisibility !== "none") {
+      this.withVisibility(eventVisibility, () => {
+        this.drawEventGutterMarkers(
+          ctx, events,
+          minBeat, maxBeat, scrollBeat, zoom,
+          canvasHeight,
+          new Set(params.selectedEventIndices ?? []),
+        );
+      });
+    }
+  }
+
+  /**
+   * Apply a layer's visibility state to a draw callback.
+   * - "none":  skip entirely
+   * - "ghost": save → globalAlpha = GHOST_ALPHA → draw → restore
+   * - "all":   draw at full opacity
+   * The save/restore pair guarantees no globalAlpha leak across passes
+   * even if the callback throws (mirrors the bug-audit-#14 pattern).
+   */
+  private withVisibility(visibility: LayerVisibility, draw: () => void) {
+    if (visibility === "none") return;
+    if (visibility === "ghost") {
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.globalAlpha = GHOST_ALPHA;
+      try { draw(); } finally { ctx.restore(); }
+      return;
+    }
+    draw();
   }
 
   // ---- Private drawing helpers ----
@@ -356,6 +500,7 @@ export class UnrolledRenderer {
     density: number, pxPerBeat: number,
     scrollBeat: number,
     canvasWidth: number, canvasHeight: number,
+    gutterWidth: number,
   ) {
     // Bug audit #3: use integer indexing to avoid floating-point drift.
     // The previous loop `for (let b = startBeat; b <= maxBeat + step; b += step)`
@@ -386,11 +531,12 @@ export class UnrolledRenderer {
       ctx.lineWidth = isWholeBeat ? 1 : 0.5;
 
       ctx.beginPath();
-      ctx.moveTo(BEAT_GUTTER_WIDTH, y);
+      ctx.moveTo(gutterWidth, y);
       ctx.lineTo(canvasWidth, y);
       ctx.stroke();
 
-      // Beat number label
+      // Beat number label — pinned to the original beat-number column,
+      // never the extended event column.
       if (isWholeBeat) {
         ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
         ctx.font = "10px monospace";
@@ -466,20 +612,21 @@ export class UnrolledRenderer {
     ctx: CanvasRenderingContext2D,
     scrollBeat: number, zoom: number,
     canvasWidth: number, canvasHeight: number,
+    gutterWidth: number,
   ) {
     const y = UnrolledRenderer.beatToY(0, scrollBeat, zoom, canvasHeight);
     if (y < 0 || y > canvasHeight) return;
 
     // Thick white bar representing the judgment line
     ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
-    ctx.fillRect(BEAT_GUTTER_WIDTH, y - 1.5, canvasWidth - BEAT_GUTTER_WIDTH, 3);
+    ctx.fillRect(gutterWidth, y - 1.5, canvasWidth - gutterWidth, 3);
 
     // Label
     ctx.font = "bold 9px monospace";
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
     ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
-    ctx.fillText("JUDGMENT LINE", BEAT_GUTTER_WIDTH + 4, y - 4);
+    ctx.fillText("JUDGMENT LINE", gutterWidth + 4, y - 4);
   }
 
   /**
@@ -496,6 +643,7 @@ export class UnrolledRenderer {
     canvasWidth: number,
     canvasHeight: number,
     opacity: number,
+    gutterWidth: number,
   ) {
     // Binary search for the first visible marker
     let lo = 0;
@@ -523,19 +671,168 @@ export class UnrolledRenderer {
       ctx.lineWidth = Math.max(1, marker.strength * 2.5);
 
       ctx.beginPath();
-      ctx.moveTo(BEAT_GUTTER_WIDTH, y);
+      ctx.moveTo(gutterWidth, y);
       ctx.lineTo(canvasWidth, y);
       ctx.stroke();
 
-      // Small triangle marker on the left edge for strong onsets
+      // Small triangle marker on the left edge for strong onsets.
+      // Triangle is anchored just inside the note area, not the
+      // beat-number column, so it doesn't collide with event diamonds.
       if (marker.strength > 0.3) {
         ctx.fillStyle = `rgba(255, 170, 50, ${alpha * 0.8})`;
         ctx.beginPath();
-        ctx.moveTo(BEAT_GUTTER_WIDTH - 4, y - 2);
-        ctx.lineTo(BEAT_GUTTER_WIDTH, y);
-        ctx.lineTo(BEAT_GUTTER_WIDTH - 4, y + 2);
+        ctx.moveTo(gutterWidth - 4, y - 2);
+        ctx.lineTo(gutterWidth, y);
+        ctx.lineTo(gutterWidth - 4, y + 2);
         ctx.fill();
       }
+    }
+  }
+
+  /**
+   * Draw event spans (faint full-width tint between start_beat and
+   * end_beat) and boundary lines (solid at start, dashed at end) for
+   * each event, color-coded by kind via EVENT_COLORS.
+   *
+   * The span tint is opt-in via `showSpanTints` (settings →
+   * unrolledShowEventSpanTints). On busy charts where many event
+   * regions overlap, tints stack and the canvas reads muddy; turning
+   * them off keeps just the clearer boundary-line treatment.
+   */
+  private drawEventSpansAndBoundaries(
+    ctx: CanvasRenderingContext2D,
+    events: LineEvent[],
+    minBeat: number, maxBeat: number,
+    scrollBeat: number, zoom: number,
+    noteAreaLeft: number, noteAreaWidth: number,
+    canvasHeight: number,
+    showSpanTints: boolean,
+  ) {
+    for (const evt of events) {
+      const startB = beatToFloat(evt.start_beat);
+      const endB = beatToFloat(evt.end_beat);
+      // Cull off-screen events.
+      if (endB < minBeat - 0.5 || startB > maxBeat + 0.5) continue;
+
+      const color = EVENT_COLORS[evt.kind] ?? "#888";
+      const yStart = UnrolledRenderer.beatToY(startB, scrollBeat, zoom, canvasHeight);
+      const yEnd   = UnrolledRenderer.beatToY(endB,   scrollBeat, zoom, canvasHeight);
+
+      // Span tint — full width, ~5% alpha. Skipped when the user has
+      // disabled span tints in settings.
+      if (showSpanTints) {
+        ctx.fillStyle = color + "0d"; // 0x0d ≈ 5% alpha
+        ctx.fillRect(
+          noteAreaLeft,
+          Math.min(yStart, yEnd),
+          noteAreaWidth,
+          Math.abs(yEnd - yStart),
+        );
+      }
+
+      // Start boundary — 2 px solid, ~65% alpha.
+      ctx.strokeStyle = color + "a6"; // 0xa6 ≈ 65%
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(noteAreaLeft, yStart);
+      ctx.lineTo(noteAreaLeft + noteAreaWidth, yStart);
+      ctx.stroke();
+
+      // End boundary — 1 px dashed, ~30% alpha. Dashed pattern wrapped
+      // in save/restore so the dash doesn't leak into later strokes
+      // (mirrors the bug-audit-#14 pattern).
+      ctx.save();
+      try {
+        ctx.strokeStyle = color + "4d"; // 0x4d ≈ 30%
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(noteAreaLeft, yEnd);
+        ctx.lineTo(noteAreaLeft + noteAreaWidth, yEnd);
+        ctx.stroke();
+      } finally {
+        ctx.restore();
+      }
+    }
+  }
+
+  /**
+   * Draw event diamond markers in the extended event-gutter column.
+   *
+   * Multiple events at the same start beat stack horizontally inside
+   * the gutter so the user can see and click each one individually.
+   * Each diamond is followed by a faint single-letter kind tag.
+   *
+   * Hit-testing in UnrolledCanvas.tsx must use the same horizontal
+   * stacking logic — see hitTestEventMarker there.
+   */
+  private drawEventGutterMarkers(
+    ctx: CanvasRenderingContext2D,
+    events: LineEvent[],
+    minBeat: number, maxBeat: number,
+    scrollBeat: number, zoom: number,
+    canvasHeight: number,
+    selectedSet: Set<number>,
+  ) {
+    // Group event indices by their start_beat so we can stack diamonds
+    // horizontally for events that share a beat. Use beatToFloat to
+    // collapse equivalent rational beats (e.g. [4,0,1] and [4,0,2]).
+    const byBeat = new Map<number, number[]>();
+    for (let i = 0; i < events.length; i++) {
+      const sb = beatToFloat(events[i].start_beat);
+      if (sb < minBeat - 0.5 || sb > maxBeat + 0.5) continue;
+      const list = byBeat.get(sb);
+      if (list) list.push(i); else byBeat.set(sb, [i]);
+    }
+
+    const innerStart = BEAT_GUTTER_WIDTH + 3; // small left padding inside the event gutter
+    const colWidth = (EVENT_GUTTER_EXTRA - 4) / 2; // fits up to 2 stacked diamonds before clipping
+
+    for (const [beat, idxList] of byBeat) {
+      const y = UnrolledRenderer.beatToY(beat, scrollBeat, zoom, canvasHeight);
+      if (y < -10 || y > canvasHeight + 10) continue;
+
+      idxList.forEach((idx, slot) => {
+        const evt = events[idx];
+        const cx = innerStart + slot * colWidth + colWidth / 2;
+        // Clip — additional events past the visible column are dropped
+        // rather than overflowing into the note area.
+        if (cx > BEAT_GUTTER_WIDTH + EVENT_GUTTER_EXTRA - 1) return;
+
+        const color = EVENT_COLORS[evt.kind] ?? "#888";
+        const isSel = selectedSet.has(idx);
+
+        // Diamond
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(cx, y - EVENT_DIAMOND_HALF);
+        ctx.lineTo(cx + EVENT_DIAMOND_HALF, y);
+        ctx.lineTo(cx, y + EVENT_DIAMOND_HALF);
+        ctx.lineTo(cx - EVENT_DIAMOND_HALF, y);
+        ctx.closePath();
+        ctx.fill();
+
+        if (isSel) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // Single-letter kind tag — only on the rightmost slot of the
+        // stack to avoid overlap. Faint so it doesn't compete with
+        // beat numbers in the adjacent column.
+        if (slot === idxList.length - 1) {
+          const letter = EVENT_KIND_LETTER[evt.kind] ?? "?";
+          ctx.fillStyle = color + "cc"; // ~80%
+          ctx.font = "bold 8px monospace";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          const tagX = cx + EVENT_DIAMOND_HALF + 2;
+          if (tagX < BEAT_GUTTER_WIDTH + EVENT_GUTTER_EXTRA - 1) {
+            ctx.fillText(letter, tagX, y);
+          }
+        }
+      });
     }
   }
 
@@ -555,13 +852,19 @@ export class UnrolledRenderer {
     const colorMap = note.above ? ABOVE_NOTE_COLORS : BELOW_NOTE_COLORS;
     const color = colorMap[note.kind] ?? "#fff";
 
+    // Compose alpha against the wrapper's current globalAlpha so the
+    // ghost-mode dim (0.3 set in withVisibility) actually applies.
+    // Setting `ctx.globalAlpha = X` is absolute, not multiplicative —
+    // so we read the base once and multiply locally.
+    const baseAlpha = ctx.globalAlpha;
+
     // Draw hold body first (behind the note head)
     if (note.kind === "hold" && note.hold_beat) {
       const holdEndBeat = beat + beatToFloat(note.hold_beat);
       const holdEndY = UnrolledRenderer.beatToY(holdEndBeat, scrollBeat, zoom, canvasHeight);
       const bodyHeight = y - holdEndY; // y goes down, beats go up
 
-      ctx.globalAlpha = 0.30;
+      ctx.globalAlpha = baseAlpha * 0.30;
       ctx.fillStyle = color;
       ctx.fillRect(
         x - HOLD_WIDTH / 2,
@@ -569,18 +872,16 @@ export class UnrolledRenderer {
         HOLD_WIDTH,
         Math.max(bodyHeight, 1),
       );
-      ctx.globalAlpha = 1;
 
       // Hold tail cap
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = baseAlpha * 0.5;
       ctx.fillRect(x - HOLD_WIDTH / 2, holdEndY - 1, HOLD_WIDTH, 3);
-      ctx.globalAlpha = 1;
     }
 
     // Note head rectangle
     ctx.fillStyle = color;
-    ctx.globalAlpha = note.above ? 0.9 : 0.85;
+    ctx.globalAlpha = baseAlpha * (note.above ? 0.9 : 0.85);
     ctx.fillRect(
       x - NOTE_WIDTH / 2,
       y - NOTE_HEIGHT / 2,
@@ -595,23 +896,20 @@ export class UnrolledRenderer {
       ctx.lineTo(x, y - NOTE_HEIGHT / 2 - 6);
       ctx.lineTo(x + 5, y - NOTE_HEIGHT / 2);
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.9;
+      ctx.globalAlpha = baseAlpha * 0.9;
       ctx.fill();
     }
 
-    // Below-line indicator: small ▼ below the note
-    if (!note.above) {
-      ctx.font = "7px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.6;
-      ctx.fillText("\u25BC", x, y + NOTE_HEIGHT / 2 + 1);
-    }
+    // (Per-note below-line glyph removed: above/below differentiation
+    // is conveyed by the ABOVE_NOTE_COLORS vs BELOW_NOTE_COLORS palette
+    // split — see canvasConstants.ts. The full-canvas "ABOVE / BELOW"
+    // header tint provides one-time orientation.)
 
-    // Selection highlight (green outline + drag handles)
+    // Selection highlight (green outline + drag handles).
+    // Honors the layer dim too — selection rings on ghosted notes
+    // also fade so they don't draw the eye to non-interactive content.
     if (isSelected) {
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = baseAlpha;
       ctx.strokeStyle = SELECTED_COLOR;
       ctx.lineWidth = 2;
       ctx.strokeRect(
@@ -648,6 +946,8 @@ export class UnrolledRenderer {
       }
     }
 
-    ctx.globalAlpha = 1;
+    // Restore so subsequent drawNote calls (and curve-track loop) see
+    // the wrapper's baseAlpha, not whatever this method last set.
+    ctx.globalAlpha = baseAlpha;
   }
 }

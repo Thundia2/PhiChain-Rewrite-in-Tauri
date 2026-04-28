@@ -19,13 +19,16 @@ import { useChartStore } from "../../stores/chartStore";
 import { useAudioStore } from "../../stores/audioStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { UnrolledRenderer } from "../../canvas/unrolledRenderer";
+import { UnrolledRenderer, effectiveGutterWidth, EVENT_DIAMOND_HIT_RADIUS, EVENT_GUTTER_EXTRA } from "../../canvas/unrolledRenderer";
 import type { UnrolledOverlayLine } from "../../canvas/unrolledRenderer";
+import { BEAT_GUTTER_WIDTH } from "../../constants/canvasConstants";
 import { BpmList } from "../../utils/bpmList";
 import { beatToFloat } from "../../types/chart";
 import { snapBeat, floatToBeat } from "../../utils/beat";
 import { snapX } from "../../utils/xSnap";
-import type { NoteKind, Beat } from "../../types/chart";
+import { placeEventAtBeats } from "../../utils/quickEventCreate";
+import { EVENT_TOOL_TO_KIND } from "../../types/editor";
+import type { NoteKind, Beat, LineEventKind } from "../../types/chart";
 
 // ============================================================
 // Props — override props allow per-line tabs to lock the canvas
@@ -57,6 +60,22 @@ interface HoldTailDragState {
   noteIndex: number;
   startMouseY: number;
   originalHoldBeat: number;
+}
+
+// ============================================================
+// Event placement drag state — tracks the click+drag flow that
+// creates a constant event on mousedown and live-updates its
+// `end_beat` as the user drags. Mirrors the `hold_placement` drag
+// in UnifiedCanvas.tsx (see plan tingly-napping-crayon.md §5).
+// ============================================================
+interface EventPlacementDragState {
+  lineIndex: number;
+  /** Index in line.events. Stable across the drag because end_beat
+   *  edits don't re-sort (sort is by start_beat). */
+  eventIndex: number;
+  /** Click beat — the immutable lower bound of the event. */
+  startBeat: number;
+  kind: LineEventKind;
 }
 
 // ============================================================
@@ -111,6 +130,7 @@ export function UnrolledCanvas({
   const noteDragRef = useRef<NoteDragState | null>(null);
   const holdTailDragRef = useRef<HoldTailDragState | null>(null);
   const dragSelectStartRef = useRef<{ x: number; y: number } | null>(null);
+  const eventPlacementDragRef = useRef<EventPlacementDragState | null>(null);
 
   // Store selectors
   const chart = useChartStore((s) => s.chart);
@@ -233,6 +253,7 @@ export function UnrolledCanvas({
         }
       }
 
+      const ss = useSettingsStore.getState();
       renderer.render({
         notes: line.notes,
         curveNoteTracks: line.curve_note_tracks,
@@ -250,7 +271,17 @@ export function UnrolledCanvas({
         overlayLines,
         overlayOpacity: es.timelineOverlayOpacity,
         onsetMarkers: es.onsetMarkers,
-        onsetOpacity: useSettingsStore.getState().onsetOpacity,
+        onsetOpacity: ss.onsetOpacity,
+        // ---- Events ----
+        // Pass the active line's flat events. Future enhancement: when
+        // es.eventEditorActiveLayer >= 0 and line.event_layers exists,
+        // merge that layer's five sub-arrays the same way KeyframeBar
+        // does (so this view stays in sync with the active layer pill).
+        events: line.events,
+        selectedEventIndices: es.selectedEventIndices,
+        noteVisibility: es.unrolledNoteVisibility,
+        eventVisibility: es.unrolledEventVisibility,
+        showEventSpanTints: ss.unrolledShowEventSpanTints,
       });
 
       rafRef.current = requestAnimationFrame(animate);
@@ -279,9 +310,24 @@ export function UnrolledCanvas({
     return { w: canvas.width / dpr, h: canvas.height / dpr };
   }, []);
 
-  /** Find the note index under the given pixel coords, or -1 */
+  /**
+   * Effective gutter width — must match what the renderer uses or
+   * note hit-tests skew left/right by EVENT_GUTTER_EXTRA pixels.
+   * Reads `unrolledEventVisibility` directly via getState so the
+   * value is always current (not memoised against a stale snapshot).
+   */
+  const getGutterWidth = useCallback((): number => {
+    return effectiveGutterWidth(useEditorStore.getState().unrolledEventVisibility);
+  }, []);
+
+  /**
+   * Find the note index under the given pixel coords, or -1.
+   * Returns -1 unconditionally when notes are ghosted/hidden so the
+   * "ghost = no misclicks" contract holds.
+   */
   const hitTestNote = useCallback((px: number, py: number): number => {
     const es = useEditorStore.getState();
+    if (es.unrolledNoteVisibility !== "all") return -1;
     const cs = useChartStore.getState();
     const lineIdx = getLineIndex();
     if (lineIdx === null) return -1;
@@ -289,7 +335,7 @@ export function UnrolledCanvas({
     if (!line) return -1;
 
     const { w, h } = getCanvasSize();
-    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w);
+    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w, getGutterWidth());
     const scrollBeat = getScrollBeat();
 
     // Iterate in reverse so topmost (later-drawn) notes are tested first
@@ -307,11 +353,12 @@ export function UnrolledCanvas({
       }
     }
     return -1;
-  }, [getCanvasSize, getLineIndex, getScrollBeat]);
+  }, [getCanvasSize, getGutterWidth, getLineIndex, getScrollBeat]);
 
   /** Check if px,py hits a hold note's tail handle. Returns the note index or -1. */
   const hitTestHoldTail = useCallback((px: number, py: number): number => {
     const es = useEditorStore.getState();
+    if (es.unrolledNoteVisibility !== "all") return -1;
     const cs = useChartStore.getState();
     const lineIdx = getLineIndex();
     if (lineIdx === null) return -1;
@@ -319,7 +366,7 @@ export function UnrolledCanvas({
     if (!line) return -1;
 
     const { w, h } = getCanvasSize();
-    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w);
+    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w, getGutterWidth());
     const scrollBeat = getScrollBeat();
 
     for (const idx of es.selectedNoteIndices) {
@@ -339,6 +386,100 @@ export function UnrolledCanvas({
       }
     }
     return -1;
+  }, [getCanvasSize, getGutterWidth, getLineIndex, getScrollBeat]);
+
+  /**
+   * Find an event diamond under the cursor and return its index in
+   * line.events, or -1. Only fires when events are interactive
+   * (visibility === "all"). The horizontal stack rules MUST mirror
+   * the renderer's drawEventGutterMarkers — events at the same
+   * start_beat occupy successive 9-px-wide slots.
+   */
+  const hitTestEventMarker = useCallback((px: number, py: number): number => {
+    const es = useEditorStore.getState();
+    if (es.unrolledEventVisibility !== "all") return -1;
+    // Only the gutter zone is interactive; ignore clicks in note area.
+    if (px < BEAT_GUTTER_WIDTH || px > BEAT_GUTTER_WIDTH + EVENT_GUTTER_EXTRA) return -1;
+
+    const cs = useChartStore.getState();
+    const lineIdx = getLineIndex();
+    if (lineIdx === null) return -1;
+    const line = cs.chart.lines[lineIdx];
+    if (!line) return -1;
+
+    const { h } = getCanvasSize();
+    const scrollBeat = getScrollBeat();
+
+    const innerStart = BEAT_GUTTER_WIDTH + 3;
+    const colWidth = (EVENT_GUTTER_EXTRA - 4) / 2;
+
+    // Group by start_beat the same way the renderer does, in iteration
+    // order, so slot indices line up with diamond positions.
+    const byBeat = new Map<number, number[]>();
+    for (let i = 0; i < line.events.length; i++) {
+      const sb = beatToFloat(line.events[i].start_beat);
+      const list = byBeat.get(sb);
+      if (list) list.push(i); else byBeat.set(sb, [i]);
+    }
+
+    for (const [beat, idxList] of byBeat) {
+      const y = UnrolledRenderer.beatToY(beat, scrollBeat, es.timelineZoom, h);
+      if (Math.abs(py - y) > EVENT_DIAMOND_HIT_RADIUS) continue;
+      for (let slot = 0; slot < idxList.length; slot++) {
+        const cx = innerStart + slot * colWidth + colWidth / 2;
+        if (Math.abs(px - cx) <= EVENT_DIAMOND_HIT_RADIUS) {
+          return idxList[slot];
+        }
+      }
+    }
+    return -1;
+  }, [getCanvasSize, getLineIndex, getScrollBeat]);
+
+  /**
+   * Find an event whose boundary line in the *note area* falls under
+   * the cursor. Returns the event index in line.events, or -1.
+   *
+   * Boundary lines are the prominent solid stroke at start_beat (drawn
+   * by drawEventSpansAndBoundaries in unrolledRenderer). The dashed
+   * end_beat line is intentionally NOT a hit target — it's a visual
+   * cue, not a primary affordance.
+   *
+   * Picks the closest event when several stack on the same beat
+   * (Math.abs distance tiebreak), so the click lands on whichever
+   * boundary is visually nearest the cursor.
+   *
+   * Gated by event visibility — same as hitTestEventMarker — so
+   * ghosted/hidden events stay non-interactive.
+   */
+  const BOUNDARY_HIT_RADIUS = 4;
+  const hitTestEventBoundary = useCallback((px: number, py: number): number => {
+    const es = useEditorStore.getState();
+    if (es.unrolledEventVisibility !== "all") return -1;
+    // Note area only — gutter clicks go through hitTestEventMarker.
+    const noteAreaLeft = effectiveGutterWidth(es.unrolledEventVisibility);
+    if (px < noteAreaLeft) return -1;
+
+    const cs = useChartStore.getState();
+    const lineIdx = getLineIndex();
+    if (lineIdx === null) return -1;
+    const line = cs.chart.lines[lineIdx];
+    if (!line) return -1;
+
+    const { h } = getCanvasSize();
+    const scrollBeat = getScrollBeat();
+
+    let bestIdx = -1;
+    let bestDist = BOUNDARY_HIT_RADIUS + 1;
+    for (let i = 0; i < line.events.length; i++) {
+      const sb = beatToFloat(line.events[i].start_beat);
+      const y = UnrolledRenderer.beatToY(sb, scrollBeat, es.timelineZoom, h);
+      const d = Math.abs(py - y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
   }, [getCanvasSize, getLineIndex, getScrollBeat]);
 
   // ---- Mouse handlers ----
@@ -356,15 +497,77 @@ export function UnrolledCanvas({
     const line = cs.chart.lines[lineIdx];
     if (!line) return;
 
-    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w);
+    const gutterWidth = getGutterWidth();
+    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w, gutterWidth);
     const scrollBeat = getScrollBeat();
     const clickBeat = UnrolledRenderer.yToBeat(y, scrollBeat, es.timelineZoom, h);
     const clickNoteX = UnrolledRenderer.pixelToNoteX(x, noteAreaLeft, noteAreaWidth);
 
     const tool = es.activeTool;
 
+    // ---- Event marker click (select tool only): handled before notes
+    // because the gutter zone never overlaps the note area, so this is
+    // an early-out rather than a priority decision. Skipped when events
+    // aren't interactive — hitTestEventMarker enforces that internally.
+    if (tool === "select") {
+      const evtIdx = hitTestEventMarker(x, y);
+      if (evtIdx >= 0) {
+        if (e.ctrlKey || e.metaKey) {
+          es.toggleEventSelection(evtIdx);
+        } else {
+          es.setEventSelection([evtIdx]);
+        }
+        es.showFloatingInspector(
+          e.clientX, e.clientY,
+          es.selectedEventIndices.length > 1 ? "multi_event" : "event",
+        );
+        return;
+      }
+    }
+
+    // ---- Place event tool: drag-define-duration flow ----
+    // Click creates a constant event with default value at the click
+    // beat with the minimum duration (1/density). Mouse-move then
+    // drags `end_beat` live until release. Mirrors the unified hold-
+    // placement flow (CanvasMouseHandlers.ts:310 → UnifiedCanvas.tsx:736).
+    // MUST be checked BEFORE the generic `tool.startsWith("place_")`
+    // branch below — `place_event_x`.startsWith("place_") is true.
+    if (tool.startsWith("place_event_")) {
+      if (es.unrolledEventVisibility !== "all") return;
+      const kind = EVENT_TOOL_TO_KIND[tool];
+      if (!kind) return;
+
+      // Snap as a float (rounded to grid), not via snapBeat() which
+      // returns a Beat tuple — placeEventAtBeats wants numbers and
+      // the mousemove drag also operates on float beats.
+      const safeDensity = es.density > 0 ? es.density : 1;
+      const startBeat = Math.max(0, Math.round(clickBeat * safeDensity) / safeDensity);
+      const minDuration = 1 / safeDensity;
+      const endBeat = startBeat + minDuration;
+
+      const eventIndex = placeEventAtBeats(lineIdx, kind, startBeat, endBeat);
+      if (eventIndex < 0) return;
+
+      // Select the new event so any keyframe-bar / inspector panels
+      // that key off selection update immediately.
+      es.setEventSelection([eventIndex]);
+
+      eventPlacementDragRef.current = {
+        lineIndex: lineIdx,
+        eventIndex,
+        startBeat,
+        kind,
+      };
+      return;
+    }
+
     // ---- Place tool: place a note ----
+    // Note-editing tools no-op when notes aren't interactive. Placing
+    // a note that you can't see (visibility ghost/none) would be a
+    // misclick magnet, so we just return — the cursor changes to
+    // not-allowed in the container style.
     if (tool.startsWith("place_")) {
+      if (es.unrolledNoteVisibility !== "all") return;
       const kind = tool.replace("place_", "") as NoteKind;
       const snappedBeat = snapBeat(clickBeat, es.density);
       const snappedX = es.xSnapEnabled ? snapX(clickNoteX, es.verticalLines) : Math.round(clickNoteX);
@@ -397,7 +600,11 @@ export function UnrolledCanvas({
     }
 
     // ---- Eraser tool: delete note under cursor ----
+    // Same gating: hitTestNote returns -1 when notes aren't interactive,
+    // so the eraser becomes a silent no-op rather than missing notes
+    // that the user can faintly see in ghost mode.
     if (tool === "eraser") {
+      if (es.unrolledNoteVisibility !== "all") return;
       const hitIdx = hitTestNote(x, y);
       if (hitIdx >= 0) {
         cs.removeNotes(lineIdx, [hitIdx]);
@@ -407,7 +614,9 @@ export function UnrolledCanvas({
 
     // ---- Select tool ----
     if (tool === "select") {
-      // Check if clicking a hold tail handle first (for resize)
+      // Check if clicking a hold tail handle first (for resize).
+      // hitTestHoldTail/hitTestNote both return -1 when notes are
+      // ghosted/hidden, so this falls through to drag-selection.
       const tailIdx = hitTestHoldTail(x, y);
       if (tailIdx >= 0) {
         const note = line.notes[tailIdx];
@@ -452,6 +661,24 @@ export function UnrolledCanvas({
         return;
       }
 
+      // Check if clicking on an event boundary line in the note area.
+      // Sits AFTER note hit-test so notes win when they coincide with
+      // an event start beat — boundaries span the full width and are
+      // a coarse-grained hit zone, notes are point-targets.
+      const boundaryIdx = hitTestEventBoundary(x, y);
+      if (boundaryIdx >= 0) {
+        if (e.ctrlKey || e.metaKey) {
+          es.toggleEventSelection(boundaryIdx);
+        } else {
+          es.setEventSelection([boundaryIdx]);
+        }
+        es.showFloatingInspector(
+          e.clientX, e.clientY,
+          es.selectedEventIndices.length > 1 ? "multi_event" : "event",
+        );
+        return;
+      }
+
       // Clicked empty space: start drag selection
       es.clearSelection();
       es.hideFloatingInspector();
@@ -459,7 +686,7 @@ export function UnrolledCanvas({
       es.setDragSelectionRect({ x1: x, y1: y, x2: x, y2: y });
       return;
     }
-  }, [getCanvasCoords, getCanvasSize, hitTestNote, hitTestHoldTail, getLineIndex, getScrollBeat]);
+  }, [getCanvasCoords, getCanvasSize, getGutterWidth, hitTestNote, hitTestHoldTail, hitTestEventMarker, hitTestEventBoundary, getLineIndex, getScrollBeat]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const { x, y } = getCanvasCoords(e);
@@ -471,7 +698,7 @@ export function UnrolledCanvas({
     const lineIdx = getLineIndex();
     if (lineIdx === null || !cs.isLoaded) return;
 
-    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w);
+    const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w, getGutterWidth());
     const scrollBeat = getScrollBeat();
 
     // ---- Note drag ----
@@ -522,6 +749,29 @@ export function UnrolledCanvas({
       return;
     }
 
+    // ---- Event placement drag ----
+    // Live-update the in-progress event's `end_beat` as the cursor
+    // moves. Snapped to density grid and clamped so duration is
+    // always >= 1/density (no zero-length or backward events).
+    if (eventPlacementDragRef.current) {
+      const drag = eventPlacementDragRef.current;
+      const safeDensity = es.density > 0 ? es.density : 1;
+      const cursorBeat = UnrolledRenderer.yToBeat(y, scrollBeat, es.timelineZoom, h);
+      const snappedCursor = Math.round(cursorBeat * safeDensity) / safeDensity;
+      const minDuration = 1 / safeDensity;
+      const newEnd = Math.max(drag.startBeat + minDuration, snappedCursor);
+
+      // Read the current event to avoid clobbering other fields and
+      // to skip writes when end_beat hasn't actually changed (cuts
+      // history churn during smooth drags).
+      const line = cs.chart.lines[drag.lineIndex];
+      const evt = line?.events[drag.eventIndex];
+      if (evt && Math.abs(beatToFloat(evt.end_beat) - newEnd) > 1e-9) {
+        cs.editEvent(drag.lineIndex, drag.eventIndex, { end_beat: floatToBeat(newEnd) });
+      }
+      return;
+    }
+
     // ---- Drag selection ----
     if (dragSelectStartRef.current) {
       const start = dragSelectStartRef.current;
@@ -530,7 +780,12 @@ export function UnrolledCanvas({
     }
 
     // ---- Ghost/pending note preview (place tool active) ----
-    if (es.activeTool.startsWith("place_")) {
+    // Note-only — `place_event_*` is excluded explicitly because it
+    // shares the `place_` prefix but draws no ghost (events are
+    // committed live on mousedown, see drag block above).
+    const isNotePlaceTool =
+      es.activeTool.startsWith("place_") && !es.activeTool.startsWith("place_event_");
+    if (isNotePlaceTool && es.unrolledNoteVisibility === "all") {
       const kind = es.activeTool.replace("place_", "") as NoteKind;
       const clickBeat = UnrolledRenderer.yToBeat(y, scrollBeat, es.timelineZoom, h);
       const clickNoteX = UnrolledRenderer.pixelToNoteX(x, noteAreaLeft, noteAreaWidth);
@@ -544,8 +799,12 @@ export function UnrolledCanvas({
         kind,
         above,
       });
+    } else if (es.pendingNote && (!isNotePlaceTool || es.unrolledNoteVisibility !== "all")) {
+      // Clear any stale ghost when notes get hidden mid-hover, or
+      // when the tool changed away from a note place tool.
+      es.setPendingNote(null);
     }
-  }, [getCanvasCoords, getCanvasSize, getLineIndex, getScrollBeat]);
+  }, [getCanvasCoords, getCanvasSize, getGutterWidth, getLineIndex, getScrollBeat]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     const es = useEditorStore.getState();
@@ -564,6 +823,17 @@ export function UnrolledCanvas({
       return;
     }
 
+    // ---- Finalize event placement ----
+    // The event was created on mousedown and `end_beat` was edited
+    // live during mousemove, so there's nothing to commit here. Just
+    // pop the FloatingInspector so the user can immediately edit the
+    // value (color, text, or numeric default).
+    if (eventPlacementDragRef.current) {
+      eventPlacementDragRef.current = null;
+      es.showFloatingInspector(e.clientX, e.clientY, "event");
+      return;
+    }
+
     // ---- Finalize drag selection ----
     if (dragSelectStartRef.current) {
       dragSelectStartRef.current = null;
@@ -574,39 +844,68 @@ export function UnrolledCanvas({
       if (!rect || lineIdx === null) return;
 
       const { w, h } = getCanvasSize();
-      const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w);
+      const { noteAreaLeft, noteAreaWidth } = UnrolledRenderer.getNoteAreaBounds(w, getGutterWidth());
       const line = cs.chart.lines[lineIdx];
       if (!line) return;
 
-      // Find all notes within the selection rectangle
       const minX = Math.min(rect.x1, rect.x2);
       const maxX = Math.max(rect.x1, rect.x2);
       const minY = Math.min(rect.y1, rect.y2);
       const maxY = Math.max(rect.y1, rect.y2);
       const scrollBeat = getScrollBeat();
 
-      const selected: number[] = [];
-      for (let i = 0; i < line.notes.length; i++) {
-        const note = line.notes[i];
-        const beat = beatToFloat(note.beat);
-        const ny = UnrolledRenderer.beatToY(beat, scrollBeat, es.timelineZoom, h);
-        const nx = UnrolledRenderer.noteXToPixel(note.x, noteAreaLeft, noteAreaWidth);
-
-        if (nx >= minX && nx <= maxX && ny >= minY && ny <= maxY) {
-          selected.push(i);
+      // Notes — only when notes are interactive. In ghost/none mode the
+      // rect still drew (visual feedback), but committing to a note
+      // selection would defeat the misclick guard.
+      const selectedNotes: number[] = [];
+      if (es.unrolledNoteVisibility === "all") {
+        for (let i = 0; i < line.notes.length; i++) {
+          const note = line.notes[i];
+          const beat = beatToFloat(note.beat);
+          const ny = UnrolledRenderer.beatToY(beat, scrollBeat, es.timelineZoom, h);
+          const nx = UnrolledRenderer.noteXToPixel(note.x, noteAreaLeft, noteAreaWidth);
+          if (nx >= minX && nx <= maxX && ny >= minY && ny <= maxY) {
+            selectedNotes.push(i);
+          }
         }
       }
 
-      if (selected.length > 0) {
-        es.setNoteSelection(selected);
-        // Show floating inspector for the selection
+      // Events — only when events are interactive. Boundary lines span
+      // the full note area width, so X is irrelevant; an event is in
+      // the rect if its start_beat Y position is within [minY, maxY].
+      const selectedEvents: number[] = [];
+      if (es.unrolledEventVisibility === "all") {
+        for (let i = 0; i < line.events.length; i++) {
+          const sb = beatToFloat(line.events[i].start_beat);
+          const ey = UnrolledRenderer.beatToY(sb, scrollBeat, es.timelineZoom, h);
+          if (ey >= minY && ey <= maxY) {
+            selectedEvents.push(i);
+          }
+        }
+      }
+
+      // Mutual-exclusion in editorStore (setNoteSelection clears events
+      // and vice versa) means we have to pick one — notes win when both
+      // are present, since notes are point-targets while event boundary
+      // lines span the full width and are easier to accidentally include.
+      // Events-only rects (drag through an event-region with no notes)
+      // now select the events, addressing the "drag-select can't pick
+      // events" bug the user reported.
+      if (selectedNotes.length > 0) {
+        es.setNoteSelection(selectedNotes);
         es.showFloatingInspector(
           e.clientX, e.clientY,
-          selected.length > 1 ? "multi_note" : "note",
+          selectedNotes.length > 1 ? "multi_note" : "note",
+        );
+      } else if (selectedEvents.length > 0) {
+        es.setEventSelection(selectedEvents);
+        es.showFloatingInspector(
+          e.clientX, e.clientY,
+          selectedEvents.length > 1 ? "multi_event" : "event",
         );
       }
     }
-  }, [getCanvasSize, getLineIndex, getScrollBeat]);
+  }, [getCanvasSize, getGutterWidth, getLineIndex, getScrollBeat]);
 
   const handleMouseLeave = useCallback(() => {
     const es = useEditorStore.getState();
@@ -639,14 +938,27 @@ export function UnrolledCanvas({
     return () => canvas.removeEventListener("wheel", handleWheel);
   }, []);
 
-  // ---- Context menu (right-click) for curve note tracks ----
+  // ---- Context menu (right-click) ----
+  // Two distinct flows depending on what's under the cursor:
+  //   - Event marker → select event + open FloatingInspector ("event" target).
+  //   - Note         → toggle curve-track creation.
+  // Both gated by their visibility — ghosted/hidden layers ignore right-click.
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const { x, y } = getCanvasCoords(e);
+    const es = useEditorStore.getState();
+
+    // Event marker first — gutter zone never overlaps the note area.
+    const evtIdx = hitTestEventMarker(x, y);
+    if (evtIdx >= 0) {
+      es.setEventSelection([evtIdx]);
+      es.showFloatingInspector(e.clientX, e.clientY, "event");
+      return;
+    }
+
+    // Note path — preserves the existing curve-track creation flow.
     const hitIdx = hitTestNote(x, y);
     if (hitIdx >= 0) {
-      const es = useEditorStore.getState();
-      // Set curve track creation state
       if (es.curveTrackCreation) {
         // Second right-click: complete the track creation
         es.setCurveTrackCreation(null);
@@ -654,7 +966,27 @@ export function UnrolledCanvas({
         es.setCurveTrackCreation({ fromNoteIndex: hitIdx });
       }
     }
-  }, [getCanvasCoords, hitTestNote]);
+  }, [getCanvasCoords, hitTestNote, hitTestEventMarker]);
+
+  // Subscribe to noteVisibility so the cursor reflects the current
+  // gating state without needing a force re-render trick.
+  const noteVisibility = useEditorStore((s) => s.unrolledNoteVisibility);
+  const eventVisibility = useEditorStore((s) => s.unrolledEventVisibility);
+
+  // Cursor reflects whether the active tool can actually do its job:
+  //   place_event_*  → gated by event visibility
+  //   place_*        → gated by note visibility
+  //   eraser         → not-allowed always (its own affordance)
+  //   else           → default
+  const isEventPlace = activeTool.startsWith("place_event_");
+  const isNotePlace = activeTool.startsWith("place_") && !isEventPlace;
+  const cursor = isEventPlace
+    ? (eventVisibility === "all" ? "crosshair" : "not-allowed")
+    : isNotePlace
+      ? (noteVisibility === "all" ? "crosshair" : "not-allowed")
+      : activeTool === "eraser"
+        ? "not-allowed"
+        : "default";
 
   return (
     <div
@@ -664,11 +996,7 @@ export function UnrolledCanvas({
         height: "100%",
         position: "relative",
         overflow: "hidden",
-        cursor: activeTool.startsWith("place_")
-          ? "crosshair"
-          : activeTool === "eraser"
-            ? "not-allowed"
-            : "default",
+        cursor,
       }}
     >
       <canvas

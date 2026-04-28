@@ -258,6 +258,12 @@ export interface PhichainChart {
   line_groups?: string[];
   /** RPE XY binding flag: when true, each moveXEvents must have a matching moveYEvents of equal length */
   xybind?: boolean;
+  /** Per-chart onset detection target density in onsets/sec (Phase B, 2026-04-20).
+   *  Overrides `settingsStore.onsetTargetDensity` when present. Range [0.5, 8.0].
+   *  Phichain-native only: dropped on Official/RPE/PEC export because those
+   *  formats have no matching field in their Rust export structs (serde
+   *  naturally strips unknown fields on re-serialization). */
+  onset_target_density?: number;
 }
 
 // ------ Project Metadata ------

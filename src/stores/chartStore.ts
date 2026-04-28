@@ -197,6 +197,12 @@ export interface ChartState {
   setMeta: (changes: Partial<ProjectMeta>) => void;
   /** Replace the entire BPM list. Invalidates the cached BpmList instance. Pushes undo. */
   setBpmList: (bpmList: BpmPoint[]) => void;
+  /** Set the per-chart onset-detection target density (Phase B, 2026-04-20).
+   *  Phichain-native only — dropped on Official/RPE/PEC export. When absent,
+   *  the editor falls back to `settingsStore.onsetTargetDensity`. Pushes undo
+   *  so density changes are reversible with Ctrl+Z just like any other chart
+   *  edit. */
+  setOnsetTargetDensity: (density: number | undefined) => void;
 
   // ---- Line mutations ----
   /** Add a new line with optional overrides. Generates a unique name if none given. Pushes undo. */
@@ -391,6 +397,20 @@ export const useChartStore = create<ChartState>()((set, get) => ({
       produce((state: ChartState) => {
         pushHistory(state);
         state.chart.bpm_list = bpmList;
+      }),
+    ),
+
+  setOnsetTargetDensity: (density) =>
+    set(
+      produce((state: ChartState) => {
+        pushHistory(state);
+        // Pass `undefined` to clear the field → falls back to the global
+        // settingsStore default at read time in useOnsetDetection.
+        if (density === undefined) {
+          delete state.chart.onset_target_density;
+        } else {
+          state.chart.onset_target_density = density;
+        }
       }),
     ),
 

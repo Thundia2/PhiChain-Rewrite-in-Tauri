@@ -79,6 +79,7 @@ export function CommandPalette({
   onShowSelectiveExport,
   onShowSpinGenerator,
   onShowShakeGenerator,
+  onShowOnsetCalibration,
 }: {
   open: boolean;
   onClose: () => void;
@@ -95,8 +96,9 @@ export function CommandPalette({
   onShowSelectiveExport?: () => void;
   onShowSpinGenerator?: () => void;
   onShowShakeGenerator?: () => void;
+  onShowOnsetCalibration?: () => void;
 }) {
-  const menus = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel, onShowPasteSpecial, onShowGoToBeat, onShowExportDiff, onShowSelectiveExport, onShowSpinGenerator, onShowShakeGenerator);
+  const menus = useMenus(onTogglePanel, onResetLayout, onNewChart, onShowParametric, onShowBatchLine, onShowLyricsSync, onShowOnDemandPanel, onShowPasteSpecial, onShowGoToBeat, onShowExportDiff, onShowSelectiveExport, onShowSpinGenerator, onShowShakeGenerator, undefined, onShowOnsetCalibration);
   const presetCommands = useMemo((): CommandItem[] => {
     return BUILTIN_PRESETS.map((preset) => ({
       id: `preset:${preset.id}`,

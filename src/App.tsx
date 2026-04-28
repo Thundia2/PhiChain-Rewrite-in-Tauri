@@ -11,7 +11,7 @@ import "react-mosaic-component/react-mosaic-component.css";
 
 import type { PanelId } from "./types/editor";
 import { useChartStore } from "./stores/chartStore";
-import { useTabStore } from "./stores/tabStore";
+import { useTabStore, chartGroupKey } from "./stores/tabStore";
 import {
   saveSession,
   restoreSession,
@@ -53,6 +53,7 @@ import { BatchLineDialog } from "./components/BatchLineDialog/BatchLineDialog";
 import { LyricsSyncDialog } from "./components/LyricsSyncDialog/LyricsSyncDialog";
 import { PasteSpecialDialog } from "./components/PasteSpecialDialog/PasteSpecialDialog";
 import { GoToBeatDialog } from "./components/GoToBeatDialog/GoToBeatDialog";
+import { OnsetCalibrationDialog } from "./components/OnsetCalibrationDialog/OnsetCalibrationDialog";
 import { ExportDiffDialog } from "./components/ExportDiffDialog/ExportDiffDialog";
 import { SelectiveExportDialog } from "./components/SelectiveExportDialog/SelectiveExportDialog";
 import { RecordReviewDialog } from "./components/RecordReviewDialog/RecordReviewDialog";
@@ -214,6 +215,10 @@ export default function App() {
   const showShakeGenerator = useDialogStore((s) => s.openDialogs.has("shake-generator"));
   const showPasteSpecial = useDialogStore((s) => s.openDialogs.has("paste-special"));
   const showGoToBeat = useDialogStore((s) => s.openDialogs.has("go-to-beat"));
+  // Phase C of onset plan (2026-04-20): calibration dialog opened from the
+  // Edit menu, command palette, or Ctrl+Shift+O. Renders alongside the other
+  // modal dialogs at the end of App.
+  const showOnsetCalibration = useDialogStore((s) => s.openDialogs.has("onset-calibration"));
   const showExportDiff = useDialogStore((s) => s.openDialogs.has("export-diff"));
   const showSelectiveExport = useDialogStore((s) => s.openDialogs.has("selective-export"));
   const showRecordReview = useDialogStore((s) => s.openDialogs.has("record-review"));
@@ -236,6 +241,7 @@ export default function App() {
     onImportChart: triggerImportChart,
     onShowGoToBeat: () => openDialog("go-to-beat"),
     onShowPasteSpecial: () => openDialog("paste-special"),
+    onShowOnsetCalibration: () => openDialog("onset-calibration"),
   });
   useClipboard();
   useOnsetDetection();
@@ -253,6 +259,21 @@ export default function App() {
 
     const prevTab = tabs.find((t) => t.id === prevTabId);
     const newTab = tabs.find((t) => t.id === activeTabId);
+
+    // Skip save/restore entirely when both tabs reference the SAME
+    // chart group (e.g. unified:current ↔ unrolled:current, or
+    // unrolled:current ↔ unrolled-line:0). The chart store already
+    // holds the right state — saving + restoring would clone, write
+    // back, and discard any in-flight edits the user just made in
+    // the previous view. (User-reported bug: an event placed in
+    // unrolled disappeared in unified after switching, then came
+    // back when returning to unrolled — caused by per-tab session
+    // snapshots overwriting cs.chart.)
+    const prevKey = prevTab ? chartGroupKey(prevTab.id) : null;
+    const newKey = newTab ? chartGroupKey(newTab.id) : null;
+    if (prevKey !== null && newKey !== null && prevKey === newKey) {
+      return;
+    }
 
     // If an entry point already saved the session, skip the automatic save
     if (shouldSkipSave()) {
@@ -414,6 +435,7 @@ export default function App() {
         onShowSpinGenerator={() => openDialog("spin-generator")}
         onShowShakeGenerator={() => openDialog("shake-generator")}
         onShowNotePattern={() => openDialog("note-pattern")}
+        onShowOnsetCalibration={() => openDialog("onset-calibration")}
       />
       <TabBar />
 
@@ -507,6 +529,7 @@ export default function App() {
       <SettingsModal open={showSettings} onClose={() => closeDialog("settings")} />
       <PasteSpecialDialog open={showPasteSpecial} onClose={() => closeDialog("paste-special")} />
       <GoToBeatDialog open={showGoToBeat} onClose={() => closeDialog("go-to-beat")} />
+      <OnsetCalibrationDialog open={showOnsetCalibration} onClose={() => closeDialog("onset-calibration")} />
       <ExportDiffDialog open={showExportDiff} onClose={() => closeDialog("export-diff")} />
       <SelectiveExportDialog open={showSelectiveExport} onClose={() => closeDialog("selective-export")} />
       <RecordReviewDialog open={showRecordReview} onClose={() => closeDialog("record-review")} onAccept={() => closeDialog("record-review")} />
@@ -526,6 +549,7 @@ export default function App() {
         onShowSelectiveExport={() => openDialog("selective-export")}
         onShowSpinGenerator={() => openDialog("spin-generator")}
         onShowShakeGenerator={() => openDialog("shake-generator")}
+        onShowOnsetCalibration={() => openDialog("onset-calibration")}
       />
       <FavoritesWizard />
       <ToastContainer />
