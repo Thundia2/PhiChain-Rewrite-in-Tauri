@@ -407,6 +407,21 @@ function EditorContent() {
         </Card>
       </div>
       <div>
+        <SectionHeader>Unrolled Editor</SectionHeader>
+        <Card>
+          <CardRow
+            label="Event span tints"
+            description="Faint colored wash between an event's start and end beats. Disable on busy charts where overlapping tints look muddy."
+            last
+          >
+            <ToggleSwitch
+              checked={settings.unrolledShowEventSpanTints}
+              onChange={(v) => update({ unrolledShowEventSpanTints: v })}
+            />
+          </CardRow>
+        </Card>
+      </div>
+      <div>
         <SectionHeader>Tab Bar</SectionHeader>
         <Card>
           <CardRow label="Tab height" description="Height of editor tab buttons in pixels">

@@ -164,12 +164,20 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
   const showSpectrogram = useEditorStore((s) => s.showSpectrogram);
   const spectrogramOpacity = useEditorStore((s) => s.spectrogramOpacity);
   const noteSideFilter = useEditorStore((s) => s.noteSideFilter);
-  // Onset detection state
+  // Onset detection state (Phase A: onsetSensitivity replaced by four new fields;
+  //                        Phase B: target density saves per-chart when loaded)
   const onsetEnabled = useSettingsStore((s) => s.onsetDetectionEnabled);
-  const onsetSensitivity = useSettingsStore((s) => s.onsetSensitivity);
   const onsetOpacity = useSettingsStore((s) => s.onsetOpacity);
   const onsetSnapToGrid = useSettingsStore((s) => s.onsetSnapToGrid);
+  const onsetTargetDensity = useSettingsStore((s) => s.onsetTargetDensity);
+  const onsetMinDisplayStrength = useSettingsStore((s) => s.onsetMinDisplayStrength);
+  const onsetAbsFloor = useSettingsStore((s) => s.onsetAbsFloor);
+  const onsetAdaptiveDelta = useSettingsStore((s) => s.onsetAdaptiveDelta);
+  const chartOnsetTargetDensity = useChartStore((s) => s.chart.onset_target_density);
   const onsetAnalyzing = useEditorStore((s) => s.onsetAnalyzing);
+  // Effective density = per-chart override if set, otherwise the global default.
+  // This is what the slider reads; writes always go to the chart (see onChange).
+  const effectiveOnsetDensity = chartOnsetTargetDensity ?? onsetTargetDensity;
   const recordMode = useEditorStore((s) => s.recordMode);
   const recordModeChannels = useEditorStore((s) => s.recordModeChannels);
   const timelineZoom = useEditorStore((s) => s.timelineZoom);
@@ -369,7 +377,11 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
             />
           )}
         </div>
-        {/* ---- Onset Detection toggle + sensitivity + opacity ---- */}
+        {/* ---- Onset Detection toggle + density / filter sliders ----
+             Phase A rewrite: the single sensitivity slider is replaced by four
+             sliders that directly control the peak-picker. Target density is
+             the main knob; the other three are advanced tuning.
+        */}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button
             onClick={() => {
@@ -389,19 +401,83 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
           </button>
           {onsetEnabled && (
             <input
-              type="range" min="0" max="1" step="0.05"
-              value={onsetSensitivity}
-              onChange={(e) => useSettingsStore.getState().updateSettings({
-                onsetSensitivity: parseFloat(e.target.value),
-              })}
+              type="range" min="0.5" max="8" step="0.1"
+              value={effectiveOnsetDensity}
+              onChange={(e) => {
+                // Phase B: persist the density per-chart via the chartStore
+                // (undo-able, serialized to chart.json). The global setting
+                // stays as the fallback for charts that haven't overridden it.
+                useChartStore.getState().setOnsetTargetDensity(parseFloat(e.target.value));
+              }}
               style={{ flex: 1, height: 4, accentColor: "#ffa832" }}
-              title={`Sensitivity: ${Math.round(onsetSensitivity * 100)}%`}
+              title={
+                `Target onset density: ${effectiveOnsetDensity.toFixed(1)}/sec. ` +
+                (chartOnsetTargetDensity !== undefined
+                  ? "Saved to this chart."
+                  : `Using global default (${onsetTargetDensity.toFixed(1)}/sec).`)
+              }
             />
+          )}
+          {onsetEnabled && (
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 32 }}>
+              {effectiveOnsetDensity.toFixed(1)}/s
+            </span>
           )}
         </div>
         {onsetEnabled && (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 8, color: "var(--text-muted)" }}>Opacity</span>
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 40 }}>Min str</span>
+            <input
+              type="range" min="0" max="1" step="0.01"
+              value={onsetMinDisplayStrength}
+              onChange={(e) => useSettingsStore.getState().updateSettings({
+                onsetMinDisplayStrength: parseFloat(e.target.value),
+              })}
+              style={{ flex: 1, height: 4, accentColor: "#ffa832" }}
+              title="Visual filter: hide markers with salience below this. Updates instantly, no re-analysis."
+            />
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 28 }}>
+              {onsetMinDisplayStrength.toFixed(2)}
+            </span>
+          </div>
+        )}
+        {onsetEnabled && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 40 }}>Abs floor</span>
+            <input
+              type="range" min="0" max="1" step="0.01"
+              value={onsetAbsFloor}
+              onChange={(e) => useSettingsStore.getState().updateSettings({
+                onsetAbsFloor: parseFloat(e.target.value),
+              })}
+              style={{ flex: 1, height: 4, accentColor: "#ffa832" }}
+              title="Absolute threshold floor. A peak must exceed this (and the rolling median + delta)."
+            />
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 28 }}>
+              {onsetAbsFloor.toFixed(2)}
+            </span>
+          </div>
+        )}
+        {onsetEnabled && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 40 }}>Adapt \u0394</span>
+            <input
+              type="range" min="0" max="0.2" step="0.005"
+              value={onsetAdaptiveDelta}
+              onChange={(e) => useSettingsStore.getState().updateSettings({
+                onsetAdaptiveDelta: parseFloat(e.target.value),
+              })}
+              style={{ flex: 1, height: 4, accentColor: "#ffa832" }}
+              title="Delta added to the 1-second rolling median to form the adaptive threshold."
+            />
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 28 }}>
+              {onsetAdaptiveDelta.toFixed(3)}
+            </span>
+          </div>
+        )}
+        {onsetEnabled && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 40 }}>Opacity</span>
             <input
               type="range" min="0" max="1" step="0.05"
               value={onsetOpacity}
@@ -410,7 +486,7 @@ function GlobalActions(props: Omit<GlobalModeProps, "activeTab">) {
               })}
               style={{ flex: 1, height: 4, accentColor: "#ffa832" }}
             />
-            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 24 }}>
+            <span style={{ fontSize: 8, color: "var(--text-muted)", minWidth: 28 }}>
               {Math.round(onsetOpacity * 100)}%
             </span>
           </div>

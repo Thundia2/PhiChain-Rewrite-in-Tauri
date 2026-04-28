@@ -27,3 +27,19 @@ build/
 .claude/
 .playwright-mcp/
 
+# Personal docs / research notes at repo root (not project files)
+/ONSET_REWRITE_PLAN.md
+/Phira_Documents2.txt
+/onsetresearch.md
+/tasker_ai_system_instructions.txt
+
+# Local audio fixtures dropped at repo root for testing (not project assets)
+/*.mp3
+/*.wav
+/*.flac
+/*.ogg
+/*.m4a
+
+# Local research / experimentation scripts (not part of the build).
+# Only the root-level `test/` directory — `src/__tests__/` (real tests) is unaffected.
+/test/

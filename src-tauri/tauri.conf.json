@@ -12,7 +12,9 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "models/onset_cnn.onnx"
+      "models/ddc_onset_placement.onnx",
+      "models/ddc_onset_extractor.bin",
+      "models/ddc_onset_normalizer.bin"
     ]
   },
   "identifier": "com.phichain.editor",

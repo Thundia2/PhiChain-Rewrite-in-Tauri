@@ -241,3 +241,31 @@ export const useTabStore = create<TabState>()((set, get) => ({
 
   clearRenaming: () => set({ renamingTabId: null }),
 }));
+
+// ============================================================
+// Chart group key — used by App.tsx to detect when two tab IDs
+// reference the same underlying chart, so it can skip saving and
+// restoring sessions on view switches that don't change the chart.
+//
+// Tab IDs follow patterns set by openChart / openUnifiedEditor /
+// openUnrolledEditor / openUnrolledLineEditor / openLineEventEditor /
+// openPanel. Stripping the type prefix yields the chart identifier
+// (or "current" for tabs that always reference the loaded chart —
+// per-line unrolled tabs, line-events tabs, and panel tabs).
+//
+// Returns null for tabs that aren't tied to any chart (only "home"
+// today, but new system tabs would also fall here).
+// ============================================================
+export function chartGroupKey(tabId: string): string | null {
+  if (tabId.startsWith("chart:")) return tabId.slice("chart:".length);
+  if (tabId.startsWith("unified:")) return tabId.slice("unified:".length);
+  if (tabId.startsWith("unrolled:")) return tabId.slice("unrolled:".length);
+  // Per-line unrolled, line-events, and panel tabs reference whatever
+  // chart is currently loaded. Treat them as part of the "current"
+  // group, matching the default chartId used by openUnified/openUnrolled
+  // when the active tab isn't chart-like (see openUnifiedEditor above).
+  if (tabId.startsWith("unrolled-line:")) return "current";
+  if (tabId.startsWith("line-events:")) return "current";
+  if (tabId.startsWith("panel:")) return "current";
+  return null;
+}

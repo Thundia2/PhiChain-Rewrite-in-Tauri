@@ -91,16 +91,39 @@ export interface SettingsState {
 
   // ---- Unrolled Editor ----
   unrolledDefaultAbove: boolean;  // Default above/below for placed notes (default true)
+  /**
+   * Draw a faint full-width tint between event start_beat and end_beat
+   * in the unrolled canvas (default true). When false, only the boundary
+   * lines + gutter diamonds are drawn — useful on busy charts where
+   * overlapping span tints make the canvas read murky.
+   */
+  unrolledShowEventSpanTints: boolean;
 
   // ---- Onset Detection (all persisted across restarts) ----
   /** Whether onset markers are visible on the timeline */
   onsetDetectionEnabled: boolean;
-  /** Sensitivity 0.0 (few markers) to 1.0 (many markers) */
+  /** DEPRECATED — kept for one release so existing settings.json files load without
+   *  errors. Not read anywhere in code (Phase A peak-picker uses the 4 fields below
+   *  instead). Removed from `saveSettings` so fresh writes no longer carry it forward.
+   *  Delete entirely in a follow-up release. */
   onsetSensitivity: number;
   /** Opacity of onset markers on the timeline 0.0-1.0 */
   onsetOpacity: number;
   /** Whether to snap onset markers to the beat grid */
   onsetSnapToGrid: boolean;
+  /** Target onset density in onsets/sec, global default (per-chart override in
+   *  chart.json is added in Phase B). Range 0.5-8.0, default 2.0 — roughly one
+   *  marker per beat at 120 BPM. */
+  onsetTargetDensity: number;
+  /** Minimum salience value a pick must have to be displayed as a marker (visual
+   *  filter applied AFTER selection, cheap to update live). Range 0-1, default 0. */
+  onsetMinDisplayStrength: number;
+  /** Absolute floor for the peak-picker's adaptive threshold — threshold(i) =
+   *  max(onsetAbsFloor, localMedian + onsetAdaptiveDelta). Range 0-1, default 0.10. */
+  onsetAbsFloor: number;
+  /** Delta added to the rolling-median when computing the adaptive threshold.
+   *  Range 0-0.20, default 0.03. */
+  onsetAdaptiveDelta: number;
 
   // ---- AI Generation ----
   /** Whether AI generation is enabled (user must opt-in) */
@@ -236,10 +259,17 @@ function sanitizeSettings(raw: Partial<SettingsData>): Partial<SettingsData> {
   if ("recentEasings" in raw) out.recentEasings = arrVal(raw.recentEasings, DEFAULTS.recentEasings);
   if ("favoriteEasings" in raw) out.favoriteEasings = arrVal(raw.favoriteEasings, DEFAULTS.favoriteEasings);
   if ("unrolledDefaultAbove" in raw) out.unrolledDefaultAbove = boolVal(raw.unrolledDefaultAbove, DEFAULTS.unrolledDefaultAbove);
+  if ("unrolledShowEventSpanTints" in raw) out.unrolledShowEventSpanTints = boolVal(raw.unrolledShowEventSpanTints, DEFAULTS.unrolledShowEventSpanTints);
   if ("onsetDetectionEnabled" in raw) out.onsetDetectionEnabled = boolVal(raw.onsetDetectionEnabled, DEFAULTS.onsetDetectionEnabled);
+  // onsetSensitivity is deprecated but sanitized so old files load without validation errors.
+  // The new peak-picker does not read it. saveSettings() no longer writes it back.
   if ("onsetSensitivity" in raw) out.onsetSensitivity = clampNum(raw.onsetSensitivity, 0, 1, DEFAULTS.onsetSensitivity);
   if ("onsetOpacity" in raw) out.onsetOpacity = clampNum(raw.onsetOpacity, 0, 1, DEFAULTS.onsetOpacity);
   if ("onsetSnapToGrid" in raw) out.onsetSnapToGrid = boolVal(raw.onsetSnapToGrid, DEFAULTS.onsetSnapToGrid);
+  if ("onsetTargetDensity" in raw) out.onsetTargetDensity = clampNum(raw.onsetTargetDensity, 0.5, 8.0, DEFAULTS.onsetTargetDensity);
+  if ("onsetMinDisplayStrength" in raw) out.onsetMinDisplayStrength = clampNum(raw.onsetMinDisplayStrength, 0, 1, DEFAULTS.onsetMinDisplayStrength);
+  if ("onsetAbsFloor" in raw) out.onsetAbsFloor = clampNum(raw.onsetAbsFloor, 0, 1, DEFAULTS.onsetAbsFloor);
+  if ("onsetAdaptiveDelta" in raw) out.onsetAdaptiveDelta = clampNum(raw.onsetAdaptiveDelta, 0, 0.20, DEFAULTS.onsetAdaptiveDelta);
   if ("aiEnabled" in raw) out.aiEnabled = boolVal(raw.aiEnabled, DEFAULTS.aiEnabled);
   if ("aiMode" in raw) out.aiMode = enumStr(raw.aiMode, ["local", "remote"] as const, DEFAULTS.aiMode);
   if ("aiEndpoint" in raw) out.aiEndpoint = typeof raw.aiEndpoint === "string" ? raw.aiEndpoint : DEFAULTS.aiEndpoint;
@@ -305,10 +335,15 @@ const DEFAULTS: SettingsData = {
   recentEasings: [],
   favoriteEasings: ["linear", "ease_out_sine", "ease_out_cubic"],
   unrolledDefaultAbove: true,
+  unrolledShowEventSpanTints: true,
   onsetDetectionEnabled: false,
   onsetSensitivity: 0.3,
   onsetOpacity: 0.6,
   onsetSnapToGrid: false,
+  onsetTargetDensity: 2.0,
+  onsetMinDisplayStrength: 0.0,
+  onsetAbsFloor: 0.10,
+  onsetAdaptiveDelta: 0.03,
   aiEnabled: false,
   aiMode: "remote" as const,
   aiEndpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -441,10 +476,18 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         showBeatGrid: state.showBeatGrid,
         beatGridBeatsAhead: state.beatGridBeatsAhead,
         unrolledDefaultAbove: state.unrolledDefaultAbove,
+        unrolledShowEventSpanTints: state.unrolledShowEventSpanTints,
         onsetDetectionEnabled: state.onsetDetectionEnabled,
+        // onsetSensitivity is deprecated — still serialized for schema compatibility,
+        // but no code reads it any more (Phase A replaced it with the 4 fields below).
+        // Remove this line + the SettingsState entry + DEFAULTS entry in the next release.
         onsetSensitivity: state.onsetSensitivity,
         onsetOpacity: state.onsetOpacity,
         onsetSnapToGrid: state.onsetSnapToGrid,
+        onsetTargetDensity: state.onsetTargetDensity,
+        onsetMinDisplayStrength: state.onsetMinDisplayStrength,
+        onsetAbsFloor: state.onsetAbsFloor,
+        onsetAdaptiveDelta: state.onsetAdaptiveDelta,
         recentColors: state.recentColors,
         recentEasings: state.recentEasings,
         favoriteEasings: state.favoriteEasings,
